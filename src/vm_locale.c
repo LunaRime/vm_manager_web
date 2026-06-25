@@ -379,18 +379,61 @@ void LocaleSet(LocaleId id) {
 }
 
 /* ============================================================================
- * Lookup
+ * UTF-8 → ANSI (system codepage) conversion buffer.
+ *
+ * The string tables are stored as UTF-8 octal escapes (compiler-agnostic),
+ * but Win32 ANSI APIs (DrawTextA, CreateWindowExA, etc.) expect the system
+ * codepage. On zh-CN Windows that is GBK (CP936). Without this conversion
+ * UTF-8 bytes are misinterpreted as GBK and produce mojibake.
+ *
+ * We convert at lookup time into a static ring buffer so callers
+ * see ANSI text without any code change.
  * ============================================================================ */
+#define U2A_BUF_COUNT  4
+#define U2A_BUF_SIZE  (16 * 1024)
+
+static char  g_u2aBufs[U2A_BUF_COUNT][U2A_BUF_SIZE];
+static int   g_u2aNext = 0;
+
+static const char *Utf8ToAnsi(const char *utf8) {
+    if (!utf8) return "??null??";
+
+    /* Quick ASCII-only shortcut (most English strings) */
+    const char *p;
+    for (p = utf8; *p; p++) {
+        if ((unsigned char)*p > 0x7F) break;
+    }
+    if (!*p) return utf8;  /* pure ASCII, no conversion needed */
+
+    /* Convert UTF-8 → UTF-16 (WCHAR) then UTF-16 → system ANSI */
+    int wLen = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, 0);
+    if (wLen <= 0 || wLen > U2A_BUF_SIZE) return utf8;
+
+    WCHAR *wbuf = (WCHAR *)HeapAlloc(GetProcessHeap(), 0, wLen * sizeof(WCHAR));
+    if (!wbuf) return utf8;
+
+    MultiByteToWideChar(CP_UTF8, 0, utf8, -1, wbuf, wLen);
+
+    char *out = g_u2aBufs[g_u2aNext];
+    g_u2aNext = (g_u2aNext + 1) % U2A_BUF_COUNT;
+
+    int aLen = WideCharToMultiByte(CP_ACP, 0, wbuf, -1, out, U2A_BUF_SIZE, NULL, NULL);
+    HeapFree(GetProcessHeap(), 0, wbuf);
+
+    if (aLen <= 0) return utf8;
+    out[U2A_BUF_SIZE - 1] = '\0';
+    return out;
+}
 const char *L10N(const char *key) {
     if (!key) return "??null??";
     const LocEntry *e = g_localeTable;
     while (e->key) {
         if (strcmp(e->key, key) == 0)
-            return e->values[g_activeLocale];
+            return Utf8ToAnsi(e->values[g_activeLocale]);
         e++;
     }
-    /* Fallback: return key itself so partial translations are still readable */
-    return key;
+    /* Fallback: return key itself */
+    return Utf8ToAnsi(key);
 }
 
 /* Reentrant-safe formatted lookup */
