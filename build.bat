@@ -7,7 +7,7 @@ REM  Output: vm_manager.exe
 REM ============================================================
 
 set "GCC=..\MinGW\bin\gcc.exe"
-set "SRC=src\main.c src\vm_engine.c src\vm_db.c src\vm_http.c src\vm_desktop.c"
+set "SRC=src\main.c src\vm_engine.c src\vm_db.c src\vm_http.c src\vm_desktop.c src\vm_locale.c"
 set "OUT=vm_manager.exe"
 set "CFLAGS=-mwindows -lpsapi -lws2_32 -lcrypt32 -lcomctl32 -lgdi32"
 set "OPT=-O2 -s -Wall"
