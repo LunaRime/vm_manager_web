@@ -123,10 +123,10 @@ static void RemoveTrayIcon(HWND hwnd) {
 }
 static void ShowTrayMenu(HWND hwnd) {
     HMENU h=CreatePopupMenu();
-    AppendMenuA(h,MF_STRING,IDM_SHOW,"&Show Window");
-    AppendMenuA(h,MF_STRING,IDM_CLEANUP,"&Manual Cleanup");
+    AppendMenuA(h,MF_STRING,IDM_SHOW,L10N(K_MENU_SHOW));
+    AppendMenuA(h,MF_STRING,IDM_CLEANUP,L10N(K_MENU_CLEANUP));
     AppendMenuA(h,MF_SEPARATOR,0,NULL);
-    AppendMenuA(h,MF_STRING,IDM_EXIT,"E&xit");
+    AppendMenuA(h,MF_STRING,IDM_EXIT,L10N(K_MENU_EXIT));
     POINT pt; GetCursorPos(&pt); SetForegroundWindow(hwnd);
     TrackPopupMenu(h,TPM_RIGHTBUTTON,pt.x,pt.y,0,hwnd,NULL);
     DestroyMenu(h);
@@ -350,7 +350,7 @@ static void DrawGdiChart(HDC hdc, RECT rc, int chartRange) {
         DeleteObject(hPfBr);
         SetTextColor(hdc,CLR_TEXT);
         RECT lt1={pl+24,11,pl+70,23};
-        DrawTextA(hdc,"Page File",-1,&lt1,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
+        DrawTextA(hdc,L10N(K_CHART_LEGEND_PF),-1,&lt1,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
 
         HBRUSH hPhBr=CreateSolidBrush(CLR_CHART_PH);
         SelectObject(hdc,hPhBr);
@@ -358,7 +358,7 @@ static void DrawGdiChart(HDC hdc, RECT rc, int chartRange) {
         FillRect(hdc,&sw2,hPhBr);
         DeleteObject(hPhBr);
         RECT lt2={pl+94,11,pl+160,23};
-        DrawTextA(hdc,"Physical",-1,&lt2,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
+        DrawTextA(hdc,L10N(K_CHART_LEGEND_PH),-1,&lt2,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
 
         HBRUSH hThBr=CreateSolidBrush(CLR_ORANGE);
         SelectObject(hdc,hThBr);
@@ -366,7 +366,7 @@ static void DrawGdiChart(HDC hdc, RECT rc, int chartRange) {
         FillRect(hdc,&sw3,hThBr);
         DeleteObject(hThBr);
         RECT lt3={pl+176,11,pl+220,23};
-        DrawTextA(hdc,"Threshold",-1,&lt3,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
+        DrawTextA(hdc,L10N(K_CHART_LEGEND_THR),-1,&lt3,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
 
         SelectObject(hdc,hOld);
     }
@@ -393,7 +393,7 @@ static void DrawOverviewPanel(HDC hdc, RECT rc) {
     SetBkMode(hdc,TRANSPARENT);
     if (g_hTitleFont) SelectObject(hdc,g_hTitleFont);
     RECT tr={rc.left+12,rc.top+8,rc.right-12,rc.top+30};
-    DrawTextA(hdc,"System Status Dashboard",-1,&tr,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
+    DrawTextA(hdc,L10N(K_CARD_TITLE),-1,&tr,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
 
     /* 4 metric cards in a row */
     int cardW=(w-48)/4;
@@ -421,29 +421,29 @@ static void DrawOverviewPanel(HDC hdc, RECT rc) {
 
         switch (c) {
         case 0:
-            label="Page File Usage";
+            label=L10N(K_CARD_PF_LABEL);
             snprintf(value,sizeof(value),"%lu%%",pf); valClr=pfClr;
-            snprintf(sub,sizeof(sub),"Threshold: %d%%",PAGE_FILE_THRESHOLD_PCT);
+            snprintf(sub,sizeof(sub),L10N(K_CARD_PF_SUB),PAGE_FILE_THRESHOLD_PCT);
             break;
         case 1:
-            label="Physical Memory";
+            label=L10N(K_CARD_PH_LABEL);
             snprintf(value,sizeof(value),"%lu%%",ph); valClr=phClr;
             {
                 char t[16],a[16];
                 FmtMB(t,sizeof(t),g_latestSnapshot.totalPhys);
                 FmtMB(a,sizeof(a),g_latestSnapshot.availPhys);
-                snprintf(sub,sizeof(sub),"%s free / %s total",a,t);
+                snprintf(sub,sizeof(sub),L10N(K_CARD_PH_SUB),a,t);
             }
             break;
         case 2:
-            label="System Idle";
+            label=L10N(K_CARD_IDLE_LABEL);
             FmtDur(value,sizeof(value),idle); valClr=CLR_ACCENT;
-            snprintf(sub,sizeof(sub),"Auto-clean after %dm idle",IDLE_THRESHOLD_SEC/60);
+            snprintf(sub,sizeof(sub),L10N(K_CARD_IDLE_SUB),IDLE_THRESHOLD_SEC/60);
             break;
         case 3:
-            label="Uptime";
+            label=L10N(K_CARD_UPTIME_LABEL);
             FmtDur(value,sizeof(value),uptime); valClr=CLR_GREEN;
-            snprintf(sub,sizeof(sub),"Dashboard: :%d | DB: %s",g_httpPort,DB_FILE_NAME);
+            snprintf(sub,sizeof(sub),L10N(K_CARD_UPTIME_SUB),g_httpPort,DB_FILE_NAME);
             break;
         }
 
@@ -704,7 +704,7 @@ static void UpdateStatusBar(HWND hwnd) {
     DWORD pf=g_latestSnapshot.pageFilePct,ph=g_latestSnapshot.physLoad;
     DWORD idle=g_latestSnapshot.idleSeconds;
     snprintf(txt,sizeof(txt),
-        "  Page File: %lu%%  |  Physical: %lu%%  |  Idle: %lus  |  Port: %d  |  Uptime: ",
+        L10N(K_STATUS_FMT),
         pf,ph,idle,g_httpPort);
     int bl=(int)strlen(txt);
     FmtDur(txt+bl,sizeof(txt)-bl,time(NULL)-g_tStartTime);
@@ -743,28 +743,28 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         SendMessageA(g_hTab,WM_SETFONT,(WPARAM)g_hGuiFont,TRUE);
         {
             TCITEMA tci; memset(&tci,0,sizeof(tci)); tci.mask=TCIF_TEXT;
-            tci.pszText="  Overview  ";  TcInsItem(g_hTab,TAB_OVERVIEW,&tci);
-            tci.pszText="  Processes  "; TcInsItem(g_hTab,TAB_PROCESSES,&tci);
-            tci.pszText="  Charts  ";    TcInsItem(g_hTab,TAB_CHART,&tci);
-            tci.pszText="  Anomalies  ";  TcInsItem(g_hTab,TAB_ANOMALIES,&tci);
-            tci.pszText="  Suspicious  "; TcInsItem(g_hTab,TAB_SUSPICIOUS,&tci);
+            tci.pszText=L10N(K_TAB_OVERVIEW);  TcInsItem(g_hTab,TAB_OVERVIEW,&tci);
+            tci.pszText=L10N(K_TAB_PROCESSES); TcInsItem(g_hTab,TAB_PROCESSES,&tci);
+            tci.pszText=L10N(K_TAB_CHARTS);    TcInsItem(g_hTab,TAB_CHART,&tci);
+            tci.pszText=L10N(K_TAB_ANOMALIES);  TcInsItem(g_hTab,TAB_ANOMALIES,&tci);
+            tci.pszText=L10N(K_TAB_SUSPICIOUS); TcInsItem(g_hTab,TAB_SUSPICIOUS,&tci);
         }
 
         /* Top-right buttons */
-        g_hBtnCleanup=CreateWindowExA(0,"BUTTON","Cleanup Now",
+        g_hBtnCleanup=CreateWindowExA(0,"BUTTON",L10N(K_BTN_CLEANUP),
             WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON|BS_FLAT,
             cw-340,8,100,26,hwnd,(HMENU)IDC_BTN_CLEANUP,
             GetModuleHandleA(NULL),NULL);
         SendMessageA(g_hBtnCleanup,WM_SETFONT,(WPARAM)g_hGuiFont,TRUE);
 
-        HWND btnExit=CreateWindowExA(0,"BUTTON","Exit Program",
+        HWND btnExit=CreateWindowExA(0,"BUTTON",L10N(K_BTN_EXIT),
             WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON|BS_FLAT,
             cw-120,8,100,26,hwnd,(HMENU)IDC_BTN_EXIT,
             GetModuleHandleA(NULL),NULL);
         SendMessageA(btnExit,WM_SETFONT,(WPARAM)g_hGuiFont,TRUE);
 
         /* Chart controls (initially hidden) */
-        g_hLblChartRange=CreateWindowExA(0,"STATIC","Time Range:",
+        g_hLblChartRange=CreateWindowExA(0,"STATIC",L10N(K_CHART_RANGE_LBL),
             WS_CHILD|SS_LEFT,16,42,80,20,hwnd,NULL,
             GetModuleHandleA(NULL),NULL);
         SendMessageA(g_hLblChartRange,WM_SETFONT,(WPARAM)g_hGuiFont,TRUE);
@@ -775,10 +775,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             100,40,140,200,hwnd,(HMENU)IDC_COMBO_RANGE,
             GetModuleHandleA(NULL),NULL);
         SendMessageA(g_hComboRange,WM_SETFONT,(WPARAM)g_hGuiFont,TRUE);
-        SendMessageA(g_hComboRange,CB_ADDSTRING,0,(LPARAM)"Past 24 Hours");
-        SendMessageA(g_hComboRange,CB_ADDSTRING,0,(LPARAM)"Past Week");
-        SendMessageA(g_hComboRange,CB_ADDSTRING,0,(LPARAM)"Past Month");
-        SendMessageA(g_hComboRange,CB_ADDSTRING,0,(LPARAM)"Past Year");
+        SendMessageA(g_hComboRange,CB_ADDSTRING,0,(LPARAM)L10N(K_CHART_RANGE_DAY));
+        SendMessageA(g_hComboRange,CB_ADDSTRING,0,(LPARAM)L10N(K_CHART_RANGE_WEEK));
+        SendMessageA(g_hComboRange,CB_ADDSTRING,0,(LPARAM)L10N(K_CHART_RANGE_MONTH));
+        SendMessageA(g_hComboRange,CB_ADDSTRING,0,(LPARAM)L10N(K_CHART_RANGE_YEAR));
         SendMessageA(g_hComboRange,CB_SETCURSEL,CHART_WEEK,0);
         ShowWindow(g_hComboRange,SW_HIDE);
 
@@ -945,7 +945,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         if ((wParam&0xFFF0)==SC_MINIMIZE) {
             ShowWindow(hwnd,SW_HIDE);
             ShowTrayBalloon(hwnd,"VM Manager",
-                "Minimized to system tray.\nDouble-click to restore.");
+                L10N(K_TRAY_BALLOON_MIN));
             return 0;
         }
         break;
@@ -953,7 +953,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
     case WM_CLOSE:
         ShowWindow(hwnd,SW_HIDE);
         ShowTrayBalloon(hwnd,"VM Manager",
-            "Still running in background.\nRight-click tray icon to exit.");
+            L10N(K_TRAY_BALLOON_CLOSE));
         return 0;
 
     case WM_DESTROY:

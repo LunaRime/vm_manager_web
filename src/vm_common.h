@@ -34,6 +34,9 @@
 #include <time.h>
 #include <stdarg.h>
 
+/* i18n */
+#include "vm_locale.h"
+
 /* ============================================================================
  * MinGW 6.3.0 commctrl.h compatibility — manually define missing constants
  * ============================================================================ */
