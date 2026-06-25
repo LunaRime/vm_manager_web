@@ -379,49 +379,75 @@ void LocaleSet(LocaleId id) {
 }
 
 /* ============================================================================
- * UTF-8 → ANSI (system codepage) conversion buffer.
+ * UTF-8 → system codepage (ANSI) + UTF-8 → UTF-16 (WCHAR) ring buffers.
  *
- * The string tables are stored as UTF-8 octal escapes (compiler-agnostic),
- * but Win32 ANSI APIs (DrawTextA, CreateWindowExA, etc.) expect the system
- * codepage. On zh-CN Windows that is GBK (CP936). Without this conversion
- * UTF-8 bytes are misinterpreted as GBK and produce mojibake.
+ * The string table stores everything as UTF-8, but Win32 has two families:
+ *   ANSI APIs (DrawTextA, SendMessageA)  → need CP_ACP bytes (GBK on zh-CN)
+ *   Wide APIs  (CreateWindowExW, SetWindowTextW) → need UTF-16 WCHAR*
  *
- * We convert at lookup time into a static ring buffer so callers
- * see ANSI text without any code change.
+ * L10N()  returns ANSI  for the *A APIs.
+ * L10NW() returns WCHAR* for the *W APIs.
+ *
+ * Both use small ring buffers — the caller must copy the result if it
+ * needs to outlive the next L10N()/L10NW() call on the same thread.
  * ============================================================================ */
 #define U2A_BUF_COUNT  4
 #define U2A_BUF_SIZE  (16 * 1024)
 
-static char  g_u2aBufs[U2A_BUF_COUNT][U2A_BUF_SIZE];
-static int   g_u2aNext = 0;
+static char   g_u2aBufs[U2A_BUF_COUNT][U2A_BUF_SIZE];
+static WCHAR  g_u2wBufs[U2A_BUF_COUNT][U2A_BUF_SIZE / 2];
+static int    g_u2aNext = 0;
+static int    g_u2wNext = 0;
+
+/* Pure-ASCII fast-path guard */
+static int IsAscii(const char *s) {
+    for (; *s; s++)
+        if ((unsigned char)*s > 0x7F) return 0;
+    return 1;
+}
 
 static const char *Utf8ToAnsi(const char *utf8) {
     if (!utf8) return "??null??";
+    if (IsAscii(utf8)) return utf8;
 
-    /* Quick ASCII-only shortcut (most English strings) */
-    const char *p;
-    for (p = utf8; *p; p++) {
-        if ((unsigned char)*p > 0x7F) break;
-    }
-    if (!*p) return utf8;  /* pure ASCII, no conversion needed */
-
-    /* Convert UTF-8 → UTF-16 (WCHAR) then UTF-16 → system ANSI */
     int wLen = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, 0);
     if (wLen <= 0 || wLen > U2A_BUF_SIZE) return utf8;
 
     WCHAR *wbuf = (WCHAR *)HeapAlloc(GetProcessHeap(), 0, wLen * sizeof(WCHAR));
     if (!wbuf) return utf8;
-
     MultiByteToWideChar(CP_UTF8, 0, utf8, -1, wbuf, wLen);
 
     char *out = g_u2aBufs[g_u2aNext];
     g_u2aNext = (g_u2aNext + 1) % U2A_BUF_COUNT;
-
     int aLen = WideCharToMultiByte(CP_ACP, 0, wbuf, -1, out, U2A_BUF_SIZE, NULL, NULL);
     HeapFree(GetProcessHeap(), 0, wbuf);
 
     if (aLen <= 0) return utf8;
     out[U2A_BUF_SIZE - 1] = '\0';
+    return out;
+}
+
+static const WCHAR *Utf8ToWide(const char *utf8) {
+    static WCHAR fallback[] = L"??null??";
+    if (!utf8) return fallback;
+    if (IsAscii(utf8)) {
+        /* ASCII shortcut: build WCHAR* directly */
+        WCHAR *out = g_u2wBufs[g_u2wNext];
+        g_u2wNext = (g_u2wNext + 1) % U2A_BUF_COUNT;
+        int i;
+        for (i = 0; utf8[i] && i < U2A_BUF_SIZE / 2 - 1; i++)
+            out[i] = (WCHAR)utf8[i];
+        out[i] = L'\0';
+        return out;
+    }
+
+    int wLen = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, 0);
+    if (wLen <= 0 || wLen > U2A_BUF_SIZE / 2) return fallback;
+
+    WCHAR *out = g_u2wBufs[g_u2wNext];
+    g_u2wNext = (g_u2wNext + 1) % U2A_BUF_COUNT;
+    MultiByteToWideChar(CP_UTF8, 0, utf8, -1, out, U2A_BUF_SIZE / 2);
+    out[U2A_BUF_SIZE / 2 - 1] = L'\0';
     return out;
 }
 const char *L10N(const char *key) {
@@ -436,7 +462,7 @@ const char *L10N(const char *key) {
     return Utf8ToAnsi(key);
 }
 
-/* Reentrant-safe formatted lookup */
+/* Reentrant-safe formatted lookup (ANSI) */
 const char *L10NF(const char *keyFmt, ...) {
     static char buf[256];
     va_list args;
@@ -444,4 +470,25 @@ const char *L10NF(const char *keyFmt, ...) {
     vsnprintf(buf, sizeof(buf), keyFmt, args);
     va_end(args);
     return L10N(buf);
+}
+
+/* WCHAR (UTF-16) lookups for Unicode APIs */
+const WCHAR *L10NW(const char *key) {
+    if (!key) return L"??null??";
+    const LocEntry *e = g_localeTable;
+    while (e->key) {
+        if (strcmp(e->key, key) == 0)
+            return Utf8ToWide(e->values[g_activeLocale]);
+        e++;
+    }
+    return Utf8ToWide(key);
+}
+
+const WCHAR *L10NWF(const char *keyFmt, ...) {
+    static char buf[256];
+    va_list args;
+    va_start(args, keyFmt);
+    vsnprintf(buf, sizeof(buf), keyFmt, args);
+    va_end(args);
+    return L10NW(buf);
 }

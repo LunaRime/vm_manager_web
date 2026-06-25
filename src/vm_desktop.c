@@ -733,15 +733,15 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             const char *titleFace = (loc == LOC_ZH_TW) ?
                 "Microsoft JhengHei" : "Microsoft YaHei";
 
-            g_hGuiFont=CreateFontA(14,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,
+            g_hGuiFont=CreateFontA(15,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,
                 DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,
-                DEFAULT_QUALITY,FF_DONTCARE,uiFace);
-            g_hTitleFont=CreateFontA(15,0,0,0,FW_SEMIBOLD,FALSE,FALSE,FALSE,
+                CLEARTYPE_QUALITY,FF_DONTCARE,uiFace);
+            g_hTitleFont=CreateFontA(18,0,0,0,FW_SEMIBOLD,FALSE,FALSE,FALSE,
                 DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,
-                DEFAULT_QUALITY,FF_DONTCARE,titleFace);
+                CLEARTYPE_QUALITY,FF_DONTCARE,titleFace);
             g_hMonoFont=CreateFontA(13,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,
                 DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,
-                DEFAULT_QUALITY,FF_DONTCARE,"Consolas");
+                CLEARTYPE_QUALITY,FF_DONTCARE,"Consolas");
         }
 
         RECT rc; GetClientRect(hwnd,&rc);
@@ -1037,8 +1037,11 @@ int RunDesktop(void) {
     wc.hIcon=LoadIcon(NULL,IDI_INFORMATION);
     if (!RegisterClassA(&wc)&&GetLastError()!=ERROR_CLASS_ALREADY_EXISTS) return 1;
 
-    HWND hwnd=CreateWindowExA(0,"VMManagerDesktop",
-        "VM Manager v4.1 — Memory Monitor & Suspicious Process Detector",
+    /* Use CreateWindowExW so the title bar renders Unicode correctly.
+     * The window class is still ANSI but the title accepts WCHAR. */
+    HWND hwnd=CreateWindowExW(0,
+        L"VMManagerDesktop",
+        L10NW(K_WIN_TITLE_MAIN),
         WS_OVERLAPPEDWINDOW|WS_CLIPCHILDREN,
         CW_USEDEFAULT,CW_USEDEFAULT,1080,760,
         NULL,NULL,GetModuleHandleA(NULL),NULL);

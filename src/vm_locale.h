@@ -18,6 +18,8 @@
 #ifndef VM_LOCALE_H
 #define VM_LOCALE_H
 
+#include <windows.h>   /* WCHAR, LANGID, etc. */
+
 /* ============================================================================
  * Locale codes
  * ============================================================================ */
@@ -41,16 +43,21 @@ LocaleId LocaleGet(void);
 /** Set locale manually (e.g., for testing or user override). */
 void LocaleSet(LocaleId id);
 
+/** WCHAR (UTF-16) lookup for Unicode APIs (CreateWindowExW, etc.). Ring-buffer pointer, copy immediately. */
+const WCHAR *L10NW(const char *key);
+
+/** WCHAR (UTF-16) formatted lookup. Ring-buffer pointer, copy immediately. */
+const WCHAR *L10NWF(const char *keyFmt, ...);
+
 /**
- * Look up a localized string by key.
+ * Look up a localized string by key as system-ANSI bytes.
  * Returns "??key??" if key not found (safe fallback).
  */
 const char *L10N(const char *key);
 
 /**
- * Formatted lookup: sprintf the key, return localized string.
- * Convenience wrapper — not reentrant (uses shared static buffer).
- * Use for dynamic keys like "page_%d" → "Page %d" / "第%d页".
+ * Formatted lookup: sprintf the key, return localized system-ANSI string.
+ * Not reentrant (uses shared static buffer).
  */
 const char *L10NF(const char *keyFmt, ...);
 
