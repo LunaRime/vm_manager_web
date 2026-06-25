@@ -15,6 +15,10 @@
 #ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
 #define DWMWA_USE_IMMERSIVE_DARK_MODE 20
 #endif
+/* MinGW 6.3.0 may lack this font-quality constant */
+#ifndef CLEARTYPE_NATURAL_QUALITY
+#define CLEARTYPE_NATURAL_QUALITY 6
+#endif
 typedef HRESULT (WINAPI *PFN_DwmSetWindowAttribute)(HWND,DWORD,LPCVOID,DWORD);
 static void EnableDarkTitleBar(HWND hwnd){
     HMODULE hDwm=LoadLibraryA("dwmapi.dll");
@@ -728,13 +732,13 @@ static LRESULT CALLBACK WndProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
             const char *face=(loc==LOC_ZH_TW)?"Microsoft JhengHei":"Microsoft YaHei";
             g_hFnt=CreateFontA(14,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,
                 DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,
-                ANTIALIASED_QUALITY,FF_DONTCARE,face);
+                CLEARTYPE_NATURAL_QUALITY,FF_DONTCARE,face);
             g_hTitleFnt=CreateFontA(18,0,0,0,FW_SEMIBOLD,FALSE,FALSE,FALSE,
                 DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,
-                ANTIALIASED_QUALITY,FF_DONTCARE,face);
+                CLEARTYPE_NATURAL_QUALITY,FF_DONTCARE,face);
             g_hMonoFnt=CreateFontA(13,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,
                 DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,
-                ANTIALIASED_QUALITY,FF_DONTCARE,"Consolas");
+                CLEARTYPE_NATURAL_QUALITY,FF_DONTCARE,"Consolas");
         }
 
         RECT rc;GetClientRect(hwnd,&rc);
@@ -747,17 +751,17 @@ static LRESULT CALLBACK WndProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
             GetModuleHandleA(NULL),NULL);
         SendMessageW(g_hTab,WM_SETFONT,(WPARAM)g_hFnt,TRUE);
         {
-            TCITEMW tci;memset(&tci,0,sizeof(tci));tci.mask=TCIF_TEXT;
-            tci.pszText=(LPWSTR)L10NW(K_TAB_OVERVIEW);
-            TcIns(g_hTab,TAB_OV,(const TCITEMA*)&tci);
-            tci.pszText=(LPWSTR)L10NW(K_TAB_PROCESSES);
-            TcIns(g_hTab,TAB_PR,(const TCITEMA*)&tci);
-            tci.pszText=(LPWSTR)L10NW(K_TAB_CHARTS);
-            TcIns(g_hTab,TAB_CH,(const TCITEMA*)&tci);
-            tci.pszText=(LPWSTR)L10NW(K_TAB_ANOMALIES);
-            TcIns(g_hTab,TAB_AN,(const TCITEMA*)&tci);
-            tci.pszText=(LPWSTR)L10NW(K_TAB_SUSPICIOUS);
-            TcIns(g_hTab,TAB_SU,(const TCITEMA*)&tci);
+            TCITEMA tci;memset(&tci,0,sizeof(tci));tci.mask=TCIF_TEXT;
+            tci.pszText=(LPSTR)L10N(K_TAB_OVERVIEW);
+            TcIns(g_hTab,TAB_OV,&tci);
+            tci.pszText=(LPSTR)L10N(K_TAB_PROCESSES);
+            TcIns(g_hTab,TAB_PR,&tci);
+            tci.pszText=(LPSTR)L10N(K_TAB_CHARTS);
+            TcIns(g_hTab,TAB_CH,&tci);
+            tci.pszText=(LPSTR)L10N(K_TAB_ANOMALIES);
+            TcIns(g_hTab,TAB_AN,&tci);
+            tci.pszText=(LPSTR)L10N(K_TAB_SUSPICIOUS);
+            TcIns(g_hTab,TAB_SU,&tci);
         }
 
         /* Buttons */
