@@ -1,0 +1,18 @@
+# VM Manager v4.0 — Git Ignore
+# Binary output
+vm_manager.exe
+*.exe
+
+# Runtime artifacts
+vm_manager.log
+vm_data.db
+
+# Editor / IDE
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+Thumbs.db
+Desktop.ini
