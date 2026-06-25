@@ -157,6 +157,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 
     g_tStartTime = time(NULL);
 
+    /* MUST be first: detect language before any UI/log output */
+    LocaleInit();
+
     /* Initialize logging */
     if (!InitLogFile()) {
         MessageBoxA(NULL,

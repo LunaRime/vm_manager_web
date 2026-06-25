@@ -7,6 +7,7 @@
  *   Tray: balloon tip on minimize
  */
 #include "vm_common.h"
+#include "vm_locale.h"   /* LocaleGet() */
 
 /* ============================================================================
  * DwmApi — dark title bar (Win10 1809+)
@@ -721,16 +722,27 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         g_hDesktopWnd=hwnd;
         EnableDarkTitleBar(hwnd);
 
-        /* Fonts */
-        g_hGuiFont=CreateFontA(14,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,
-            DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,
-            DEFAULT_QUALITY,FF_DONTCARE,"Segoe UI");
-        g_hTitleFont=CreateFontA(15,0,0,0,FW_SEMIBOLD,FALSE,FALSE,FALSE,
-            DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,
-            DEFAULT_QUALITY,FF_DONTCARE,"Segoe UI");
-        g_hMonoFont=CreateFontA(13,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,
-            DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,
-            DEFAULT_QUALITY,FF_DONTCARE,"Consolas");
+        /* Fonts — use CJK-capable typeface so Chinese renders correctly.
+         * On zh-CN/zh-TW Windows, "Microsoft YaHei" / "Microsoft JhengHei" are
+         * always present and support the full CJK range. Segoe UI is secondary
+         * for Western glyphs, but is buggy with Chinese on some Win10 builds. */
+        {
+            LocaleId loc = LocaleGet();
+            const char *uiFace = (loc == LOC_ZH_TW) ?
+                "Microsoft JhengHei" : "Microsoft YaHei";
+            const char *titleFace = (loc == LOC_ZH_TW) ?
+                "Microsoft JhengHei" : "Microsoft YaHei";
+
+            g_hGuiFont=CreateFontA(14,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,
+                DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,
+                DEFAULT_QUALITY,FF_DONTCARE,uiFace);
+            g_hTitleFont=CreateFontA(15,0,0,0,FW_SEMIBOLD,FALSE,FALSE,FALSE,
+                DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,
+                DEFAULT_QUALITY,FF_DONTCARE,titleFace);
+            g_hMonoFont=CreateFontA(13,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,
+                DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,
+                DEFAULT_QUALITY,FF_DONTCARE,"Consolas");
+        }
 
         RECT rc; GetClientRect(hwnd,&rc);
         int cw=rc.right-rc.left,ch=rc.bottom-rc.top;
