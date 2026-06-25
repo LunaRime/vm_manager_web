@@ -1,184 +1,189 @@
 /**
- * vm_desktop.c — Desktop GUI v2.0
- *   Dark title bar via DwmSetWindowAttribute (Win10 1809+)
- *   Overview: summary cards + process list + action log
- *   Charts: GDI with gradient fill, dot markers, 85% threshold line
- *   Lists: custom-draw colored rows with severity bars
- *   Tray: balloon tip on minimize
+ * vm_desktop.c — Desktop GUI v3.0
+ *   Unicode window registration → clean CJK title bar
+ *   ClearType fonts (ANTIALIASED_QUALITY)
+ *   All strings localized via L10N/L10NW
+ *   New: bar chart mode (toggle) alongside line chart
+ *   UI polish: section labels, better spacing
  */
 #include "vm_common.h"
-#include "vm_locale.h"   /* LocaleGet() */
+#include "vm_locale.h"
 
 /* ============================================================================
- * DwmApi — dark title bar (Win10 1809+)
+ * Dwm dark title bar (Win10 1809+)
  * ============================================================================ */
 #ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
 #define DWMWA_USE_IMMERSIVE_DARK_MODE 20
 #endif
-typedef HRESULT (WINAPI *PFN_DwmSetWindowAttribute)(HWND, DWORD, LPCVOID, DWORD);
-static void EnableDarkTitleBar(HWND hwnd) {
-    HMODULE hDwm = LoadLibraryA("dwmapi.dll");
-    if (hDwm) {
-        PFN_DwmSetWindowAttribute pfn = (PFN_DwmSetWindowAttribute)
-            GetProcAddress(hDwm, "DwmSetWindowAttribute");
-        if (pfn) {
-            BOOL useDark = TRUE;
-            pfn(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &useDark, sizeof(useDark));
-        }
-        /* dont FreeLibrary — keep DWM loaded for the window lifetime */
+typedef HRESULT (WINAPI *PFN_DwmSetWindowAttribute)(HWND,DWORD,LPCVOID,DWORD);
+static void EnableDarkTitleBar(HWND hwnd){
+    HMODULE hDwm=LoadLibraryA("dwmapi.dll");
+    if(hDwm){
+        PFN_DwmSetWindowAttribute pfn=(PFN_DwmSetWindowAttribute)
+            GetProcAddress(hDwm,"DwmSetWindowAttribute");
+        if(pfn){BOOL d=TRUE;pfn(hwnd,DWMWA_USE_IMMERSIVE_DARK_MODE,&d,sizeof(d));}
     }
 }
 
 /* ============================================================================
  * Forward declarations
  * ============================================================================ */
-static LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
-static LRESULT CALLBACK ChartProc(HWND, UINT, WPARAM, LPARAM);
-static LRESULT CALLBACK OverviewProc(HWND, UINT, WPARAM, LPARAM);
-static void     DrawGdiChart(HDC, RECT, int);
-static void     DrawOverviewPanel(HDC, RECT);
-static void     RefreshDesktopData(HWND);
-static void     AddTrayIcon(HWND);
-static void     RemoveTrayIcon(HWND);
-static void     ShowTrayMenu(HWND);
-static void     ShowTrayBalloon(HWND, const char *title, const char *msg);
+static LRESULT CALLBACK WndProc(HWND,UINT,WPARAM,LPARAM);
+static LRESULT CALLBACK ChartProc(HWND,UINT,WPARAM,LPARAM);
+static LRESULT CALLBACK OverviewProc(HWND,UINT,WPARAM,LPARAM);
+static void DrawGdiLineChart(HDC,RECT,int);
+static void DrawGdiBarChart(HDC,RECT,int);
+static void DrawOverviewPanel(HDC,RECT);
+static void RefreshDesktopData(HWND);
+static void AddTrayIcon(HWND);
+static void RemoveTrayIcon(HWND);
+static void ShowTrayMenu(HWND);
+static void ShowTrayBalloon(HWND,const WCHAR *title,const WCHAR *msg);
 
 /* ============================================================================
- * Raw SendMessage wrappers for ListView (MinGW 6.3.0 compat)
+ * ListView / TabCtrl raw SendMessage wrappers (MinGW 6.3.0 compat)
  * ============================================================================ */
-static int  LvInsertItem(HWND lv, const LVITEMA *item) { return (int)SendMessageA(lv, LVM_INSERTITEMA, 0, (LPARAM)item); }
-static int  LvInsertCol(HWND lv, int iCol, const LV_COLUMNA *col) { return (int)SendMessageA(lv, LVM_INSERTCOLUMNA, (WPARAM)iCol, (LPARAM)col); }
-static void LvSetText(HWND lv, int i, int iSubItem, const char *text) {
-    LVITEMA lvi; memset(&lvi, 0, sizeof(lvi)); lvi.iSubItem = iSubItem; lvi.pszText = (LPSTR)text;
-    SendMessageA(lv, LVM_SETITEMTEXTA, (WPARAM)i, (LPARAM)&lvi);
+static int  LvIns(HWND lv,const LVITEMA *it){return (int)SendMessageA(lv,LVM_INSERTITEMA,0,(LPARAM)it);}
+static int  LvInsCol(HWND lv,int i,const LV_COLUMNA *c){return (int)SendMessageA(lv,LVM_INSERTCOLUMNA,(WPARAM)i,(LPARAM)c);}
+static void LvSetTxt(HWND lv,int i,int sub,const char *t){
+    LVITEMA lvi;memset(&lvi,0,sizeof(lvi));lvi.iSubItem=sub;lvi.pszText=(LPSTR)t;
+    SendMessageA(lv,LVM_SETITEMTEXTA,(WPARAM)i,(LPARAM)&lvi);
 }
-static void LvDelAll(HWND lv) { SendMessageA(lv, LVM_DELETEALLITEMS, 0, 0); }
-static void LvSetExSt(HWND lv, DWORD ex) { SendMessageA(lv, LVM_SETEXTENDEDLISTVIEWSTYLE, 0, (LPARAM)ex); }
-static int  TcInsItem(HWND tc, int i, const TCITEMA *tci) { return (int)SendMessageA(tc, TCM_INSERTITEMA, (WPARAM)i, (LPARAM)tci); }
-static int  TcGetSel(HWND tc) { return (int)SendMessageA(tc, TCM_GETCURSEL, 0, 0); }
+static void LvDelA(HWND lv){SendMessageA(lv,LVM_DELETEALLITEMS,0,0);}
+static void LvExSt(HWND lv,DWORD ex){SendMessageA(lv,LVM_SETEXTENDEDLISTVIEWSTYLE,0,(LPARAM)ex);}
+static int  TcIns(HWND tc,int i,const TCITEMA *tci){return (int)SendMessageA(tc,TCM_INSERTITEMA,(WPARAM)i,(LPARAM)tci);}
+static int  TcSel(HWND tc){return (int)SendMessageA(tc,TCM_GETCURSEL,0,0);}
 
 /* ============================================================================
  * Globals
  * ============================================================================ */
-static HWND   g_hDesktopWnd = NULL, g_hTab = NULL, g_hChartArea = NULL;
-static HWND   g_hOverviewPane = NULL;
-static HWND   g_hProcList = NULL, g_hAnomalyList = NULL, g_hSuspList = NULL, g_hActionList = NULL;
-static HWND   g_hBtnCleanup = NULL, g_hComboRange = NULL, g_hStatusBar = NULL;
-static HWND   g_hLblChartRange = NULL;
-static int    g_chartRange = CHART_WEEK;
-static HFONT  g_hGuiFont = NULL, g_hTitleFont = NULL, g_hMonoFont = NULL;
+static HWND  g_hDsk=NULL,g_hTab=NULL,g_hChart=NULL,g_hOvPane=NULL;
+static HWND  g_hProc=NULL,g_hAnom=NULL,g_hSusp=NULL,g_hAct=NULL;
+static HWND  g_hClnup=NULL,g_hCbo=NULL,g_hSts=NULL,g_hLblCbo=NULL;
+static HWND  g_hBtnBar=NULL;
+static int   g_range=CHART_WEEK;
+static int   g_chartMode=0; /* 0=line, 1=bar */
+static HFONT g_hFnt=NULL,g_hTitleFnt=NULL,g_hMonoFnt=NULL;
 
 /* ============================================================================
- * Dark theme colors — GitHub-style
+ * Dark theme colors
  * ============================================================================ */
-#define CLR_BG          RGB(13, 17, 23)
-#define CLR_CARD        RGB(22, 27, 34)
-#define CLR_CARD2       RGB(30, 35, 42)
-#define CLR_BORDER      RGB(48, 54, 61)
-#define CLR_BORDER_LT   RGB(58, 64, 71)
-#define CLR_TEXT        RGB(225, 230, 237)
-#define CLR_TEXT2       RGB(201, 209, 217)
-#define CLR_MUTED       RGB(139, 148, 158)
-#define CLR_ACCENT      RGB(88, 166, 255)
-#define CLR_GREEN       RGB(63, 185, 80)
-#define CLR_RED         RGB(248, 81, 73)
-#define CLR_ORANGE      RGB(255, 159, 50)
-#define CLR_YELLOW      RGB(210, 153, 34)
-#define CLR_CHART_PF    RGB(88, 166, 255)
-#define CLR_CHART_PH    RGB(63, 185, 80)
-#define CLR_GAUGE_HI    RGB(248, 81, 73)
-#define CLR_GAUGE_MID   RGB(210, 153, 34)
-#define CLR_GAUGE_LO    RGB(63, 185, 80)
+#define CLR_BG       RGB(13,17,23)
+#define CLR_CARD     RGB(22,27,34)
+#define CLR_CARD2    RGB(30,35,42)
+#define CLR_BORDER   RGB(48,54,61)
+#define CLR_BORDERLT RGB(58,64,71)
+#define CLR_TEXT     RGB(225,230,237)
+#define CLR_TEXT2    RGB(201,209,217)
+#define CLR_MUTED    RGB(139,148,158)
+#define CLR_ACCENT   RGB(88,166,255)
+#define CLR_GREEN    RGB(63,185,80)
+#define CLR_RED      RGB(248,81,73)
+#define CLR_ORANGE   RGB(255,159,50)
+#define CLR_YELLOW   RGB(210,153,34)
+#define CLR_PF       RGB(88,166,255)
+#define CLR_PH       RGB(63,185,80)
+#define CLR_BAR_BLUE RGB(88,166,255)
+#define CLR_BAR_GREEN RGB(63,185,80)
+#define CLR_BAR_RED   RGB(248,81,73)
+#define CLR_BAR_YELLOW RGB(210,153,34)
 
 /* ============================================================================
  * Formatting helpers
  * ============================================================================ */
-static void FmtMB(char *o, int sz, ULONGLONG b) {
-    if (b >= 1024ULL*1024*1024) snprintf(o, sz, "%.1f GB", b/(1024.0*1024.0*1024.0));
-    else snprintf(o, sz, "%I64u MB", (unsigned long long)(b/(1024*1024)));
+static void FmtMB(char *o,int sz,ULONGLONG b){
+    if(b>=1073741824ULL)snprintf(o,sz,"%.1f GB",b/1073741824.0);
+    else snprintf(o,sz,"%I64u MB",(unsigned long long)(b/1048576));
 }
-static void FmtTime(char *o, int sz, time_t t) {
-    struct tm *tm = localtime(&t); strftime(o, sz, "%Y-%m-%d %H:%M", tm);
+static void FmtTime(char *o,int sz,time_t t){
+    struct tm *tm=localtime(&t);strftime(o,sz,"%Y-%m-%d %H:%M",tm);
 }
-static void FmtDur(char *o, int sz, time_t sec) {
-    if (sec<60) snprintf(o,sz,"%I64ds",(long long)sec);
-    else if (sec<3600) snprintf(o,sz,"%I64dm",(long long)(sec/60));
+static void FmtDur(char *o,int sz,time_t sec){
+    if(sec<60)snprintf(o,sz,"%I64ds",(long long)sec);
+    else if(sec<3600)snprintf(o,sz,"%I64dm",(long long)(sec/60));
     else snprintf(o,sz,"%I64dh %I64dm",(long long)(sec/3600),(long long)((sec%3600)/60));
 }
 
 /* ============================================================================
- * System tray
+ * Wide-char helpers for Unicode windows
  * ============================================================================ */
-static void AddTrayIcon(HWND hwnd) {
-    NOTIFYICONDATAA nid; memset(&nid,0,sizeof(nid));
-    nid.cbSize=sizeof(NOTIFYICONDATAA); nid.hWnd=hwnd; nid.uID=TRAY_UID;
-    nid.uFlags=NIF_ICON|NIF_MESSAGE|NIF_TIP;
-    nid.uCallbackMessage=WM_TRAYICON; nid.hIcon=LoadIcon(NULL,IDI_INFORMATION);
-    lstrcpyA((LPSTR)nid.szTip,"VM Manager — Memory Monitor");
-    Shell_NotifyIconA(NIM_ADD,&nid);
-}
-static void RemoveTrayIcon(HWND hwnd) {
-    NOTIFYICONDATAA nid; memset(&nid,0,sizeof(nid));
-    nid.cbSize=sizeof(NOTIFYICONDATAA); nid.hWnd=hwnd; nid.uID=TRAY_UID;
-    Shell_NotifyIconA(NIM_DELETE,&nid);
-}
-static void ShowTrayMenu(HWND hwnd) {
-    HMENU h=CreatePopupMenu();
-    AppendMenuA(h,MF_STRING,IDM_SHOW,L10N(K_MENU_SHOW));
-    AppendMenuA(h,MF_STRING,IDM_CLEANUP,L10N(K_MENU_CLEANUP));
-    AppendMenuA(h,MF_SEPARATOR,0,NULL);
-    AppendMenuA(h,MF_STRING,IDM_EXIT,L10N(K_MENU_EXIT));
-    POINT pt; GetCursorPos(&pt); SetForegroundWindow(hwnd);
-    TrackPopupMenu(h,TPM_RIGHTBUTTON,pt.x,pt.y,0,hwnd,NULL);
-    DestroyMenu(h);
-}
-static void ShowTrayBalloon(HWND hwnd, const char *title, const char *msg) {
-    NOTIFYICONDATAA nid; memset(&nid,0,sizeof(nid));
-    nid.cbSize=sizeof(NOTIFYICONDATAA); nid.hWnd=hwnd; nid.uID=TRAY_UID;
-    nid.uFlags=NIF_INFO;
-    lstrcpyA((LPSTR)nid.szInfoTitle,title);
-    lstrcpyA((LPSTR)nid.szInfo,msg);
-    nid.dwInfoFlags=NIIF_INFO;
-    Shell_NotifyIconA(NIM_MODIFY,&nid);
+static const WCHAR *MakeW(const char *ascii){
+    static WCHAR buf[256];int i;
+    for(i=0;ascii[i]&&i<255;i++)buf[i]=(WCHAR)ascii[i];
+    buf[i]=0;return buf;
 }
 
 /* ============================================================================
- * GDI Chart — gradient fill, dot markers, 85% threshold line
+ * System tray (Unicode)
  * ============================================================================ */
-static void DrawGdiChart(HDC hdc, RECT rc, int chartRange) {
-    int w=rc.right-rc.left, h=rc.bottom-rc.top;
-    if (w<=0||h<=0) return;
+static void AddTrayIcon(HWND hwnd){
+    NOTIFYICONDATAW nid;memset(&nid,0,sizeof(nid));
+    nid.cbSize=sizeof(NOTIFYICONDATAW);nid.hWnd=hwnd;nid.uID=TRAY_UID;
+    nid.uFlags=NIF_ICON|NIF_MESSAGE|NIF_TIP;
+    nid.uCallbackMessage=WM_TRAYICON;nid.hIcon=LoadIconW(NULL,MAKEINTRESOURCEW(32512));
+    lstrcpyW(nid.szTip,L10NW(K_TRAY_TIP));
+    Shell_NotifyIconW(NIM_ADD,&nid);
+}
+static void RemoveTrayIcon(HWND hwnd){
+    NOTIFYICONDATAW nid;memset(&nid,0,sizeof(nid));
+    nid.cbSize=sizeof(NOTIFYICONDATAW);nid.hWnd=hwnd;nid.uID=TRAY_UID;
+    Shell_NotifyIconW(NIM_DELETE,&nid);
+}
+static void ShowTrayMenu(HWND hwnd){
+    HMENU h=CreatePopupMenu();
+    AppendMenuW(h,MF_STRING,IDM_SHOW,L10NW(K_MENU_SHOW));
+    AppendMenuW(h,MF_STRING,IDM_CLEANUP,L10NW(K_MENU_CLEANUP));
+    AppendMenuW(h,MF_SEPARATOR,0,NULL);
+    AppendMenuW(h,MF_STRING,IDM_EXIT,L10NW(K_MENU_EXIT));
+    POINT pt;GetCursorPos(&pt);SetForegroundWindow(hwnd);
+    TrackPopupMenu(h,TPM_RIGHTBUTTON,pt.x,pt.y,0,hwnd,NULL);
+    DestroyMenu(h);
+}
+static void ShowTrayBalloon(HWND hwnd,const WCHAR *title,const WCHAR *msg){
+    NOTIFYICONDATAW nid;memset(&nid,0,sizeof(nid));
+    nid.cbSize=sizeof(NOTIFYICONDATAW);nid.hWnd=hwnd;nid.uID=TRAY_UID;
+    nid.uFlags=NIF_INFO;
+    lstrcpyW(nid.szInfoTitle,title);
+    lstrcpyW(nid.szInfo,msg);
+    nid.dwInfoFlags=NIIF_INFO;
+    Shell_NotifyIconW(NIM_MODIFY,&nid);
+}
 
-    /* Background */
+/* ============================================================================
+ * GDI Bar Chart
+ * ============================================================================ */
+static void DrawGdiBarChart(HDC hdc,RECT rc,int range){
+    int w=rc.right-rc.left,h=rc.bottom-rc.top;
+    if(w<=0||h<=0)return;
     HBRUSH hBg=CreateSolidBrush(CLR_CARD);
-    FillRect(hdc,&rc,hBg); DeleteObject(hBg);
+    FillRect(hdc,&rc,hBg);DeleteObject(hBg);
 
-    int pt=36, pb=44, pl=58, pr=36;
-    int pw=w-pl-pr, ph=h-pt-pb;
-    if (pw<=0||ph<=0) return;
+    int pt=36,pb=44,pl=60,pr=36;
+    int pw=w-pl-pr,ph=h-pt-pb;
+    if(pw<=0||ph<=0)return;
 
-    AggBucket *buckets=NULL; int count=0, maxTake=30;
+    AggBucket *buckets=NULL;int count=0,maxTake=12;
     EnterCriticalSection(&g_csData);
-    switch (chartRange) {
-    case CHART_DAY:   buckets=g_hourlyBuckets; count=g_hourlyCount; maxTake=24;  break;
-    case CHART_WEEK:  buckets=g_dailyBuckets;  count=g_dailyCount;  maxTake=7;   break;
-    case CHART_MONTH: buckets=g_dailyBuckets;  count=g_dailyCount;  maxTake=30;  break;
-    case CHART_YEAR:  buckets=g_monthlyBuckets;count=g_monthlyCount;maxTake=12;  break;
+    switch(range){
+    case CHART_DAY:  buckets=g_hourlyBuckets;count=g_hourlyCount;maxTake=12;break;
+    case CHART_WEEK: buckets=g_dailyBuckets;count=g_dailyCount;maxTake=7;break;
+    case CHART_MONTH:buckets=g_dailyBuckets;count=g_dailyCount;maxTake=12;break;
+    case CHART_YEAR: buckets=g_monthlyBuckets;count=g_monthlyCount;maxTake=12;break;
     }
     int take=count<maxTake?count:maxTake;
-    int start=count-take; if (start<0){start=0;take=count;}
+    int start=count-take;if(start<0){start=0;take=count;}
     AggBucket *plot=(AggBucket*)HeapAlloc(GetProcessHeap(),0,take*sizeof(AggBucket));
-    if (plot) memcpy(plot,buckets+start,take*sizeof(AggBucket));
+    if(plot)memcpy(plot,buckets+start,take*sizeof(AggBucket));
     LeaveCriticalSection(&g_csData);
-    if (!plot||take<2){if(plot)HeapFree(GetProcessHeap(),0,plot);return;}
+    if(!plot||take<1){if(plot)HeapFree(GetProcessHeap(),0,plot);return;}
 
-    /* 85% threshold line */
-    HPEN hThrPen=CreatePen(PS_DASH,1,CLR_ORANGE);
-    HPEN hOld=(HPEN)SelectObject(hdc,hThrPen);
+    /* Threshold line */
+    HPEN hThr=CreatePen(PS_DASH,1,CLR_ORANGE);
+    HPEN hOld=(HPEN)SelectObject(hdc,hThr);
     int thrY=pt+ph-(ph*85/100);
-    MoveToEx(hdc,pl,thrY,NULL); LineTo(hdc,pl+pw,thrY);
-    SelectObject(hdc,hOld); DeleteObject(hThrPen);
-    SetTextColor(hdc,CLR_ORANGE); SetBkMode(hdc,TRANSPARENT);
+    MoveToEx(hdc,pl,thrY,NULL);LineTo(hdc,pl+pw,thrY);
+    SelectObject(hdc,hOld);DeleteObject(hThr);
+    SetTextColor(hdc,CLR_ORANGE);SetBkMode(hdc,TRANSPARENT);
     RECT thrR={pl+pw-40,thrY-16,pl+pw-2,thrY-2};
     DrawTextA(hdc,"85%",-1,&thrR,DT_RIGHT|DT_BOTTOM|DT_SINGLELINE);
 
@@ -186,249 +191,309 @@ static void DrawGdiChart(HDC hdc, RECT rc, int chartRange) {
     HPEN hGd=CreatePen(PS_SOLID,1,CLR_BORDER);
     hOld=(HPEN)SelectObject(hdc,hGd);
     int g;
-    for (g=0;g<=100;g+=25) {
+    for(g=0;g<=100;g+=25){
         int y=pt+ph-(ph*g/100);
-        MoveToEx(hdc,pl,y,NULL); LineTo(hdc,pl+pw,y);
-        char lb[8]; snprintf(lb,sizeof(lb),"%d%%",g);
+        MoveToEx(hdc,pl,y,NULL);LineTo(hdc,pl+pw,y);
+        char lb[8];snprintf(lb,sizeof(lb),"%d%%",g);
         SetTextColor(hdc,CLR_MUTED);
         RECT tr={2,y-8,pl-4,y+8};
         DrawTextA(hdc,lb,-1,&tr,DT_RIGHT|DT_VCENTER|DT_SINGLELINE);
     }
-    /* bottom axis */
-    MoveToEx(hdc,pl,pt+ph,NULL); LineTo(hdc,pl+pw,pt+ph);
-    SelectObject(hdc,hOld); DeleteObject(hGd);
+    MoveToEx(hdc,pl,pt+ph,NULL);LineTo(hdc,pl+pw,pt+ph);
+    SelectObject(hdc,hOld);DeleteObject(hGd);
 
-    /* ---- Gradient fill under Page File line ---- */
-    {
-        POINT *pts=(POINT*)HeapAlloc(GetProcessHeap(),0,(take+2)*sizeof(POINT));
-        int i;
-        for (i=0;i<take;i++) {
-            double v=plot[i].sampleCount>0?plot[i].pfSum/plot[i].sampleCount:0;
-            pts[i].x=pl+(int)((double)i/(take-1)*pw);
-            int y=pt+ph-(int)(v/100.0*ph);
-            if (y<pt)y=pt;
-            if (y>pt+ph)y=pt+ph;
-            pts[i].y=y;
-        }
-        pts[take].x=pts[take-1].x; pts[take].y=pt+ph;
-        pts[take+1].x=pts[0].x; pts[take+1].y=pt+ph;
-        /* gradient fill: top=accent at 15% alpha, bottom=transparent */
-        for (i=pl;i<pl+pw;i++) {
-            int seg=-1;
-            int s;
-            for (s=0;s<take-1;s++) if (i>=pts[s].x&&i<=pts[s+1].x){seg=s;break;}
-            if (seg<0) continue;
-            double t=(double)(i-pts[seg].x)/(pts[seg+1].x-pts[seg].x);
-            int lineY=(int)(pts[seg].y+t*(pts[seg+1].y-pts[seg].y));
-            if (lineY<pt+ph) {
-                /* alpha blend: fade 0→40 intensity toward bottom */
-                int hh=(pt+ph)-lineY;
-                int alpha=hh<ph/2?30:30-20*(hh-ph/2)/(ph/2);
-                if (alpha<5) alpha=5;
-                COLORREF fc=CLR_CHART_PF;
-                int r=GetRValue(fc),gr=GetGValue(fc),b=GetBValue(fc);
-                int br=GetRValue(CLR_CARD),bgr=GetGValue(CLR_CARD),bb=GetBValue(CLR_CARD);
-                r=r*alpha/100+br*(100-alpha)/100;
-                gr=gr*alpha/100+bgr*(100-alpha)/100;
-                b=b*alpha/100+bb*(100-alpha)/100;
-                HPEN hPg=CreatePen(PS_SOLID,1,RGB(r,gr,b));
-                HPEN hPold=(HPEN)SelectObject(hdc,hPg);
-                MoveToEx(hdc,i,lineY,NULL); LineTo(hdc,i,pt+ph);
-                SelectObject(hdc,hPold); DeleteObject(hPg);
-            }
-        }
-        HeapFree(GetProcessHeap(),0,pts);
+    /* Draw bars — groups of two (PF + PH) per bucket */
+    int barGap=8,groupGap=12;
+    int nGroups=take;
+    int barsPerGroup=2;
+    int totalBars=nGroups*barsPerGroup;
+    int avail=pw-groupGap*(nGroups-1);
+    int barW=avail/totalBars;
+    if(barW<4)barW=4;
+
+    int i;
+    for(i=0;i<take;i++){
+        double pfAvg=plot[i].sampleCount>0?plot[i].pfSum/plot[i].sampleCount:0;
+        double phAvg=plot[i].sampleCount>0?plot[i].phSum/plot[i].sampleCount:0;
+        int gx=pl+(int)((double)i/(take-1)*pw);
+        int bx=gx-(totalBars*barW+(nGroups-1)*groupGap)/2+(nGroups-1)*groupGap/2;
+
+        /* PF bar */
+        int pfH=(int)(pfAvg/100.0*ph);
+        int pfy=pt+ph-pfH;
+        if(pfH<2)pfH=2;
+        HBRUSH bPf=CreateSolidBrush(CLR_PF);
+        RECT rPf={bx,pfy,bx+barW,pt+ph};
+        FillRect(hdc,&rPf,bPf);DeleteObject(bPf);
+
+        /* PH bar */
+        int phH=(int)(phAvg/100.0*ph);
+        int phy=pt+ph-phH;
+        if(phH<2)phH=2;
+        HBRUSH bPh=CreateSolidBrush(CLR_PH);
+        RECT rPh={bx+barW+2,phy,bx+barW*2+2,pt+ph};
+        FillRect(hdc,&rPh,bPh);DeleteObject(bPh);
+
+        /* Value labels */
+        char vl[8];
+        snprintf(vl,sizeof(vl),"%.0f",pfAvg);
+        SetTextColor(hdc,CLR_PF);
+        RECT vlR={bx,pfy-16,bx+barW,pfy-2};
+        DrawTextA(hdc,vl,-1,&vlR,DT_CENTER|DT_BOTTOM|DT_SINGLELINE);
     }
 
-    /* Physical Memory gradient (green) */
+    /* X-axis labels */
+    SetTextColor(hdc,CLR_MUTED);
+    for(i=0;i<take;i++){
+        if(take>8&&i%(take/4)!=0&&i!=take-1)continue;
+        int x=pl+(int)((double)i/(take-1)*pw);
+        char lb[32];struct tm *tm=localtime(&plot[i].bucketStart);
+        if(range==CHART_DAY)strftime(lb,sizeof(lb),"%H:%M",tm);
+        else if(range==CHART_YEAR)strftime(lb,sizeof(lb),"%b",tm);
+        else strftime(lb,sizeof(lb),"%m/%d",tm);
+        RECT tr={x-25,pt+ph+6,x+25,pt+ph+22};
+        DrawTextA(hdc,lb,-1,&tr,DT_CENTER|DT_TOP|DT_SINGLELINE);
+    }
+
+    /* Legend */
+    {
+        RECT lg={pl,8,pl+160,26};
+        HBRUSH hLg=CreateSolidBrush(CLR_CARD2);
+        HPEN hLgP=CreatePen(PS_SOLID,1,CLR_BORDERLT);
+        SelectObject(hdc,hLg);SelectObject(hdc,hLgP);
+        RoundRect(hdc,lg.left,lg.top,lg.right,lg.bottom,8,8);
+        DeleteObject(hLg);DeleteObject(hLgP);
+
+        HBRUSH b1=CreateSolidBrush(CLR_PF);
+        FillRect(hdc,&(RECT){pl+8,13,pl+20,21},b1);DeleteObject(b1);
+        SetTextColor(hdc,CLR_TEXT);
+        RECT l1={pl+24,11,pl+70,23};
+        DrawTextA(hdc,L10N(K_CHART_LEGEND_PF),-1,&l1,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
+
+        HBRUSH b2=CreateSolidBrush(CLR_PH);
+        FillRect(hdc,&(RECT){pl+78,13,pl+90,21},b2);DeleteObject(b2);
+        RECT l2={pl+94,11,pl+140,23};
+        DrawTextA(hdc,L10N(K_CHART_LEGEND_PH),-1,&l2,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
+
+        SelectObject(hdc,hOld);
+    }
+    HeapFree(GetProcessHeap(),0,plot);
+}
+
+/* ============================================================================
+ * GDI Line Chart (simplified — no per-pixel gradient for perf)
+ * ============================================================================ */
+static void DrawGdiLineChart(HDC hdc,RECT rc,int range){
+    int w=rc.right-rc.left,h=rc.bottom-rc.top;
+    if(w<=0||h<=0)return;
+    HBRUSH hBg=CreateSolidBrush(CLR_CARD);
+    FillRect(hdc,&rc,hBg);DeleteObject(hBg);
+
+    int pt=36,pb=44,pl=60,pr=36;
+    int pw=w-pl-pr,ph=h-pt-pb;
+    if(pw<=0||ph<=0)return;
+
+    AggBucket *buckets=NULL;int count=0,maxTake=30;
+    EnterCriticalSection(&g_csData);
+    switch(range){
+    case CHART_DAY:  buckets=g_hourlyBuckets;count=g_hourlyCount;maxTake=24;break;
+    case CHART_WEEK: buckets=g_dailyBuckets;count=g_dailyCount;maxTake=7;break;
+    case CHART_MONTH:buckets=g_dailyBuckets;count=g_dailyCount;maxTake=30;break;
+    case CHART_YEAR: buckets=g_monthlyBuckets;count=g_monthlyCount;maxTake=12;break;
+    }
+    int take=count<maxTake?count:maxTake;
+    int start=count-take;if(start<0){start=0;take=count;}
+    AggBucket *plot=(AggBucket*)HeapAlloc(GetProcessHeap(),0,take*sizeof(AggBucket));
+    if(plot)memcpy(plot,buckets+start,take*sizeof(AggBucket));
+    LeaveCriticalSection(&g_csData);
+    if(!plot||take<2){if(plot)HeapFree(GetProcessHeap(),0,plot);return;}
+
+    /* 85% threshold */
+    HPEN hThr=CreatePen(PS_DASH,1,CLR_ORANGE);
+    HPEN hOld=(HPEN)SelectObject(hdc,hThr);
+    int thrY=pt+ph-(ph*85/100);
+    MoveToEx(hdc,pl,thrY,NULL);LineTo(hdc,pl+pw,thrY);
+    SelectObject(hdc,hOld);DeleteObject(hThr);
+    SetTextColor(hdc,CLR_ORANGE);SetBkMode(hdc,TRANSPARENT);
+    RECT thrR={pl+pw-40,thrY-16,pl+pw-2,thrY-2};
+    DrawTextA(hdc,"85%",-1,&thrR,DT_RIGHT|DT_BOTTOM|DT_SINGLELINE);
+
+    /* Grid */
+    HPEN hGd=CreatePen(PS_SOLID,1,CLR_BORDER);
+    hOld=(HPEN)SelectObject(hdc,hGd);
+    int g;
+    for(g=0;g<=100;g+=25){
+        int y=pt+ph-(ph*g/100);
+        MoveToEx(hdc,pl,y,NULL);LineTo(hdc,pl+pw,y);
+        char lb[8];snprintf(lb,sizeof(lb),"%d%%",g);
+        SetTextColor(hdc,CLR_MUTED);
+        RECT tr={2,y-8,pl-4,y+8};
+        DrawTextA(hdc,lb,-1,&tr,DT_RIGHT|DT_VCENTER|DT_SINGLELINE);
+    }
+    MoveToEx(hdc,pl,pt+ph,NULL);LineTo(hdc,pl+pw,pt+ph);
+    SelectObject(hdc,hOld);DeleteObject(hGd);
+
+    /* Semi-transparent fill under PF (horizontal line stripes) */
     {
         int i;
-        for (i=pl;i<pl+pw;i++) {
-            int seg=-1;
-            int s;
-            double phValPrev=plot[0].sampleCount>0?plot[0].phSum/plot[0].sampleCount:0;
-            double phValNext=phValPrev;
-            for (s=0;s<take-1;s++) {
-                int x0=pl+(int)((double)s/(take-1)*pw);
-                int x1=pl+(int)((double)(s+1)/(take-1)*pw);
-                if (i>=x0&&i<=x1){seg=s;phValPrev=plot[s].sampleCount>0?plot[s].phSum/plot[s].sampleCount:0;phValNext=plot[s+1].sampleCount>0?plot[s+1].phSum/plot[s+1].sampleCount:0;break;}
+        for(i=0;i<take-1;i++){
+            int x0=pl+(int)((double)i/(take-1)*pw);
+            int x1=pl+(int)((double)(i+1)/(take-1)*pw);
+            double pf0=plot[i].sampleCount>0?plot[i].pfSum/plot[i].sampleCount:0;
+            double pf1=plot[i+1].sampleCount>0?plot[i+1].pfSum/plot[i+1].sampleCount:0;
+            int y0=pt+ph-(int)(pf0/100.0*ph);
+            int y1=pt+ph-(int)(pf1/100.0*ph);
+            /* thin fill stripe */
+            HPEN hF=CreatePen(PS_SOLID,1,RGB(GetRValue(CLR_PF)/4,GetGValue(CLR_PF)/4,GetBValue(CLR_PF)/4));
+            HPEN hOld2=(HPEN)SelectObject(hdc,hF);
+            int x;
+            for(x=x0;x<=x1;x+=2){
+                double t=(double)(x-x0)/(x1-x0);
+                int yy=(int)(y0+t*(y1-y0));
+                MoveToEx(hdc,x,yy,NULL);LineTo(hdc,x,pt+ph);
             }
-            if (seg<0) continue;
-            double t=(double)(i-pl-(int)((double)seg/(take-1)*pw));
-            double denom=(pl+(int)((double)(seg+1)/(take-1)*pw)-pl-(int)((double)seg/(take-1)*pw));
-            if (denom==0) denom=1;
-            t/=denom;
-            double v=phValPrev+t*(phValNext-phValPrev);
-            int lineY=pt+ph-(int)(v/100.0*ph);
-            if (lineY<pt)lineY=pt;
-            if (lineY>pt+ph)lineY=pt+ph;
-            if (lineY<pt+ph) {
-                int hh=(pt+ph)-lineY,alpha=hh<ph/2?25:25-15*(hh-ph/2)/(ph/2);
-                if (alpha<3)alpha=3;
-                COLORREF fc=CLR_CHART_PH;
-                int r=GetRValue(fc),gr=GetGValue(fc),b=GetBValue(fc);
-                r=r*alpha/100+GetRValue(CLR_CARD)*(100-alpha)/100;
-                gr=gr*alpha/100+GetGValue(CLR_CARD)*(100-alpha)/100;
-                b=b*alpha/100+GetBValue(CLR_CARD)*(100-alpha)/100;
-                HPEN hPg=CreatePen(PS_SOLID,1,RGB(r,gr,b));
-                HPEN hPold=(HPEN)SelectObject(hdc,hPg);
-                MoveToEx(hdc,i,lineY,NULL); LineTo(hdc,i,pt+ph);
-                SelectObject(hdc,hPold); DeleteObject(hPg);
-            }
+            SelectObject(hdc,hOld2);DeleteObject(hF);
         }
     }
 
-    /* Page File line (solid blue, 3px) */
-    HPEN hPf=CreatePen(PS_SOLID,3,CLR_CHART_PF);
+    /* PF line */
+    HPEN hPf=CreatePen(PS_SOLID,3,CLR_PF);
     hOld=(HPEN)SelectObject(hdc,hPf);
     int i;
-    for (i=0;i<take;i++) {
+    for(i=0;i<take;i++){
         double v=plot[i].sampleCount>0?plot[i].pfSum/plot[i].sampleCount:0;
         int x=pl+(int)((double)i/(take-1)*pw);
         int y=pt+ph-(int)(v/100.0*ph);
-        if (y<pt)y=pt; if (y>pt+ph)y=pt+ph;
-        if (i==0) MoveToEx(hdc,x,y,NULL); else LineTo(hdc,x,y);
+        if(y<pt)y=pt;if(y>pt+ph)y=pt+ph;
+        if(i==0)MoveToEx(hdc,x,y,NULL);else LineTo(hdc,x,y);
     }
-    SelectObject(hdc,hOld); DeleteObject(hPf);
+    SelectObject(hdc,hOld);DeleteObject(hPf);
 
-    /* Physical Memory line (dashed green, 2px) */
-    HPEN hPh=CreatePen(PS_DASH,2,CLR_CHART_PH);
+    /* PH line */
+    HPEN hPh=CreatePen(PS_DASH,2,CLR_PH);
     hOld=(HPEN)SelectObject(hdc,hPh);
-    for (i=0;i<take;i++) {
+    for(i=0;i<take;i++){
         double v=plot[i].sampleCount>0?plot[i].phSum/plot[i].sampleCount:0;
         int x=pl+(int)((double)i/(take-1)*pw);
         int y=pt+ph-(int)(v/100.0*ph);
-        if (y<pt)y=pt; if (y>pt+ph)y=pt+ph;
-        if (i==0) MoveToEx(hdc,x,y,NULL); else LineTo(hdc,x,y);
+        if(y<pt)y=pt;if(y>pt+ph)y=pt+ph;
+        if(i==0)MoveToEx(hdc,x,y,NULL);else LineTo(hdc,x,y);
     }
-    SelectObject(hdc,hOld); DeleteObject(hPh);
+    SelectObject(hdc,hOld);DeleteObject(hPh);
 
-    /* Dot markers on the PF line (every N points) */
+    /* Dot markers */
     int dotStep=take>12?take/6:1;
-    for (i=0;i<take;i+=dotStep) {
+    for(i=0;i<take;i+=dotStep){
         double v=plot[i].sampleCount>0?plot[i].pfMax:0;
         int x=pl+(int)((double)i/(take-1)*pw);
         int y=pt+ph-(int)(v/100.0*ph);
-        if (y<pt)y=pt; if (y>pt+ph)y=pt+ph;
-        HBRUSH hDot=CreateSolidBrush(CLR_CHART_PF);
-        HPEN hDotP=CreatePen(PS_SOLID,2,CLR_CARD);
-        SelectObject(hdc,hDot); SelectObject(hdc,hDotP);
+        if(y<pt)y=pt;if(y>pt+ph)y=pt+ph;
+        HBRUSH hD=CreateSolidBrush(CLR_PF);
+        HPEN hDP=CreatePen(PS_SOLID,2,CLR_CARD);
+        SelectObject(hdc,hD);SelectObject(hdc,hDP);
         Ellipse(hdc,x-4,y-4,x+4,y+4);
-        SelectObject(hdc,hOld); DeleteObject(hDot); DeleteObject(hDotP);
-        /* max value label */
-        char mx[8]; snprintf(mx,sizeof(mx),"%.0f%%",v);
-        SetTextColor(hdc,CLR_CHART_PF);
+        SelectObject(hdc,hOld);DeleteObject(hD);DeleteObject(hDP);
+        char mx[8];snprintf(mx,sizeof(mx),"%.0f%%",v);
+        SetTextColor(hdc,CLR_PF);
         RECT mr={x-18,y-22,x+18,y-8};
         DrawTextA(hdc,mx,-1,&mr,DT_CENTER|DT_BOTTOM|DT_SINGLELINE);
     }
 
     /* X-axis labels */
     SetTextColor(hdc,CLR_MUTED);
-    for (i=0;i<take;i++) {
-        if (take>12&&i%(take/6)!=0&&i!=take-1) continue;
+    for(i=0;i<take;i++){
+        if(take>12&&i%(take/6)!=0&&i!=take-1)continue;
         int x=pl+(int)((double)i/(take-1)*pw);
-        char lb[32]; struct tm *tm=localtime(&plot[i].bucketStart);
-        if (chartRange==CHART_DAY) strftime(lb,sizeof(lb),"%H:%M",tm);
-        else if (chartRange==CHART_YEAR) strftime(lb,sizeof(lb),"%b",tm);
+        char lb[32];struct tm *tm=localtime(&plot[i].bucketStart);
+        if(range==CHART_DAY)strftime(lb,sizeof(lb),"%H:%M",tm);
+        else if(range==CHART_YEAR)strftime(lb,sizeof(lb),"%b",tm);
         else strftime(lb,sizeof(lb),"%m/%d",tm);
         RECT tr={x-25,pt+ph+6,x+25,pt+ph+22};
         DrawTextA(hdc,lb,-1,&tr,DT_CENTER|DT_TOP|DT_SINGLELINE);
     }
 
-    /* Legend — rounded pill style */
+    /* Legend */
     {
-        RECT lg={pl,8,pl+200,26};
+        RECT lg={pl,8,pl+180,26};
         HBRUSH hLg=CreateSolidBrush(CLR_CARD2);
-        HPEN hLgP=CreatePen(PS_SOLID,1,CLR_BORDER_LT);
-        SelectObject(hdc,hLg); SelectObject(hdc,hLgP);
+        HPEN hLgP=CreatePen(PS_SOLID,1,CLR_BORDERLT);
+        SelectObject(hdc,hLg);SelectObject(hdc,hLgP);
         RoundRect(hdc,lg.left,lg.top,lg.right,lg.bottom,8,8);
-        SelectObject(hdc,hOld); DeleteObject(hLg); DeleteObject(hLgP);
+        DeleteObject(hLg);DeleteObject(hLgP);
 
-        HBRUSH hPfBr=CreateSolidBrush(CLR_CHART_PF);
-        SelectObject(hdc,hPfBr);
-        RECT sw1={pl+8,13,pl+20,21};
-        FillRect(hdc,&sw1,hPfBr);
-        DeleteObject(hPfBr);
+        HBRUSH b1=CreateSolidBrush(CLR_PF);
+        FillRect(hdc,&(RECT){pl+8,13,pl+20,21},b1);DeleteObject(b1);
         SetTextColor(hdc,CLR_TEXT);
-        RECT lt1={pl+24,11,pl+70,23};
-        DrawTextA(hdc,L10N(K_CHART_LEGEND_PF),-1,&lt1,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
+        RECT l1={pl+24,11,pl+70,23};
+        DrawTextA(hdc,L10N(K_CHART_LEGEND_PF),-1,&l1,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
 
-        HBRUSH hPhBr=CreateSolidBrush(CLR_CHART_PH);
-        SelectObject(hdc,hPhBr);
-        RECT sw2={pl+78,13,pl+90,21};
-        FillRect(hdc,&sw2,hPhBr);
-        DeleteObject(hPhBr);
-        RECT lt2={pl+94,11,pl+160,23};
-        DrawTextA(hdc,L10N(K_CHART_LEGEND_PH),-1,&lt2,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
+        HBRUSH b2=CreateSolidBrush(CLR_PH);
+        FillRect(hdc,&(RECT){pl+78,13,pl+90,21},b2);DeleteObject(b2);
+        RECT l2={pl+94,11,pl+140,23};
+        DrawTextA(hdc,L10N(K_CHART_LEGEND_PH),-1,&l2,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
 
-        HBRUSH hThBr=CreateSolidBrush(CLR_ORANGE);
-        SelectObject(hdc,hThBr);
-        RECT sw3={pl+160,13,pl+172,21};
-        FillRect(hdc,&sw3,hThBr);
-        DeleteObject(hThBr);
-        RECT lt3={pl+176,11,pl+220,23};
-        DrawTextA(hdc,L10N(K_CHART_LEGEND_THR),-1,&lt3,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
+        HBRUSH b3=CreateSolidBrush(CLR_ORANGE);
+        FillRect(hdc,&(RECT){pl+148,13,pl+160,21},b3);DeleteObject(b3);
+        RECT l3={pl+164,11,pl+210,23};
+        DrawTextA(hdc,L10N(K_CHART_LEGEND_THR),-1,&l3,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
 
         SelectObject(hdc,hOld);
     }
-
     HeapFree(GetProcessHeap(),0,plot);
 }
 
 /* ============================================================================
- * Overview panel — GDI-drawn summary cards at top of Overview tab
+ * Overview panel — 4 metric cards
  * ============================================================================ */
-static void DrawOverviewPanel(HDC hdc, RECT rc) {
-    int w=rc.right-rc.left, h2=rc.bottom-rc.top;
-    if (w<=0||h2<=0) return;
+static void DrawOverviewPanel(HDC hdc,RECT rc){
+    int w=rc.right-rc.left,h2=rc.bottom-rc.top;
+    if(w<=0||h2<=0)return;
 
-    /* Card background */
+    /* Background */
     HBRUSH hBg=CreateSolidBrush(CLR_CARD);
-    HPEN hBorder=CreatePen(PS_SOLID,1,CLR_BORDER);
-    SelectObject(hdc,hBg); SelectObject(hdc,hBorder);
+    HPEN hBdr=CreatePen(PS_SOLID,1,CLR_BORDER);
+    SelectObject(hdc,hBg);SelectObject(hdc,hBdr);
     Rectangle(hdc,rc.left,rc.top,rc.right,rc.bottom);
-    DeleteObject(hBg); DeleteObject(hBorder);
+    DeleteObject(hBg);DeleteObject(hBdr);
 
     /* Title */
-    SetTextColor(hdc,CLR_TEXT);
-    SetBkMode(hdc,TRANSPARENT);
-    if (g_hTitleFont) SelectObject(hdc,g_hTitleFont);
+    SetTextColor(hdc,CLR_TEXT);SetBkMode(hdc,TRANSPARENT);
+    if(g_hTitleFnt)SelectObject(hdc,g_hTitleFnt);
     RECT tr={rc.left+12,rc.top+8,rc.right-12,rc.top+30};
     DrawTextA(hdc,L10N(K_CARD_TITLE),-1,&tr,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
 
-    /* 4 metric cards in a row */
     int cardW=(w-48)/4;
     int cardH=h2-44;
-    int c, cx=rc.left+12, cy=rc.top+36;
+    int c,cx=rc.left+12,cy=rc.top+36;
 
     DWORD pf=g_latestSnapshot.pageFilePct;
     DWORD ph=g_latestSnapshot.physLoad;
     DWORD idle=g_latestSnapshot.idleSeconds;
-    time_t uptime=time(NULL)-g_tStartTime;
+    time_t ut=time(NULL)-g_tStartTime;
 
     COLORREF pfClr=pf>85?CLR_RED:pf>60?CLR_YELLOW:CLR_GREEN;
     COLORREF phClr=ph>90?CLR_RED:ph>70?CLR_YELLOW:CLR_GREEN;
 
-    for (c=0;c<4;c++) {
+    for(c=0;c<4;c++){
         RECT card={cx,cy,cx+cardW,cy+cardH};
         HBRUSH hCb=CreateSolidBrush(CLR_CARD2);
-        HPEN hCp=CreatePen(PS_SOLID,1,CLR_BORDER_LT);
-        SelectObject(hdc,hCb); SelectObject(hdc,hCp);
+        HPEN hCp=CreatePen(PS_SOLID,1,CLR_BORDERLT);
+        SelectObject(hdc,hCb);SelectObject(hdc,hCp);
         RoundRect(hdc,card.left,card.top,card.right,card.bottom,6,6);
-        DeleteObject(hCb); DeleteObject(hCp);
+        DeleteObject(hCb);DeleteObject(hCp);
 
-        const char *label; char value[32], sub[64];
+        const char *label;char value[32],sub[64];
         COLORREF valClr=CLR_TEXT;
 
-        switch (c) {
+        switch(c){
         case 0:
             label=L10N(K_CARD_PF_LABEL);
-            snprintf(value,sizeof(value),"%lu%%",pf); valClr=pfClr;
+            snprintf(value,sizeof(value),"%lu%%",pf);valClr=pfClr;
             snprintf(sub,sizeof(sub),L10N(K_CARD_PF_SUB),PAGE_FILE_THRESHOLD_PCT);
             break;
         case 1:
             label=L10N(K_CARD_PH_LABEL);
-            snprintf(value,sizeof(value),"%lu%%",ph); valClr=phClr;
+            snprintf(value,sizeof(value),"%lu%%",ph);valClr=phClr;
             {
                 char t[16],a[16];
                 FmtMB(t,sizeof(t),g_latestSnapshot.totalPhys);
@@ -438,257 +503,189 @@ static void DrawOverviewPanel(HDC hdc, RECT rc) {
             break;
         case 2:
             label=L10N(K_CARD_IDLE_LABEL);
-            FmtDur(value,sizeof(value),idle); valClr=CLR_ACCENT;
+            FmtDur(value,sizeof(value),idle);valClr=CLR_ACCENT;
             snprintf(sub,sizeof(sub),L10N(K_CARD_IDLE_SUB),IDLE_THRESHOLD_SEC/60);
             break;
         case 3:
             label=L10N(K_CARD_UPTIME_LABEL);
-            FmtDur(value,sizeof(value),uptime); valClr=CLR_GREEN;
+            FmtDur(value,sizeof(value),ut);valClr=CLR_GREEN;
             snprintf(sub,sizeof(sub),L10N(K_CARD_UPTIME_SUB),g_httpPort,DB_FILE_NAME);
             break;
         }
 
         SetTextColor(hdc,CLR_MUTED);
-        if (g_hGuiFont) SelectObject(hdc,g_hGuiFont);
+        if(g_hFnt)SelectObject(hdc,g_hFnt);
         RECT lb={card.left+10,card.top+6,card.right-10,card.top+22};
         DrawTextA(hdc,label,-1,&lb,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
 
         SetTextColor(hdc,valClr);
-        if (g_hTitleFont) SelectObject(hdc,g_hTitleFont);
+        if(g_hTitleFnt)SelectObject(hdc,g_hTitleFnt);
         RECT vr={card.left+10,card.top+26,card.right-10,card.top+52};
         DrawTextA(hdc,value,-1,&vr,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
 
         SetTextColor(hdc,CLR_MUTED);
-        if (g_hGuiFont) SelectObject(hdc,g_hGuiFont);
+        if(g_hFnt)SelectObject(hdc,g_hFnt);
         RECT sr={card.left+10,card.top+cardH-22,card.right-10,card.top+cardH-6};
         DrawTextA(hdc,sub,-1,&sr,DT_LEFT|DT_VCENTER|DT_SINGLELINE);
 
         cx+=cardW+8;
     }
-
-    /* Section divider text */
-    SetTextColor(hdc,CLR_MUTED);
-    if (g_hGuiFont) SelectObject(hdc,g_hGuiFont);
-    {
-        RECT secR={rc.left+12,rc.top+h2+4,rc.right-12,rc.top+h2+22};
-        (void)secR; /* placeholder for future section divider */
-    }
 }
 
 /* ============================================================================
- * Overview pane — custom window hosting the overview cards + process + action
+ * Pane window procs
  * ============================================================================ */
-static LRESULT CALLBACK OverviewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-    switch (msg) {
-    case WM_PAINT: {
-        PAINTSTRUCT ps; HDC hdc=BeginPaint(hwnd,&ps);
-        RECT rc; GetClientRect(hwnd,&rc);
-        /* top part: overview cards (96px) */
-        RECT top={4,4,rc.right-4,88};
-        DrawOverviewPanel(hdc,top);
-        EndPaint(hwnd,&ps);
-        return 0;
+static LRESULT CALLBACK OverviewProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
+    switch(msg){
+    case WM_PAINT:{PAINTSTRUCT ps;HDC hdc=BeginPaint(hwnd,&ps);RECT rc;GetClientRect(hwnd,&rc);
+        DrawOverviewPanel(hdc,(RECT){4,4,rc.right-4,88});EndPaint(hwnd,&ps);return 0;}
+    case WM_ERASEBKGND:return 1;
     }
-    case WM_ERASEBKGND: return 1;
+    return DefWindowProcW(hwnd,msg,wp,lp);
+}
+static LRESULT CALLBACK ChartProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
+    switch(msg){
+    case WM_PAINT:{PAINTSTRUCT ps;HDC hdc=BeginPaint(hwnd,&ps);RECT rc;GetClientRect(hwnd,&rc);
+        if(g_chartMode==0)DrawGdiLineChart(hdc,rc,g_range);
+        else DrawGdiBarChart(hdc,rc,g_range);
+        EndPaint(hwnd,&ps);return 0;}
+    case WM_ERASEBKGND:return 1;
     }
-    return DefWindowProcA(hwnd,msg,wParam,lParam);
+    return DefWindowProcW(hwnd,msg,wp,lp);
 }
 
 /* ============================================================================
- * Chart sub-window
+ * ListView update functions (all localized)
  * ============================================================================ */
-static LRESULT CALLBACK ChartProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-    switch (msg) {
-    case WM_PAINT: {
-        PAINTSTRUCT ps; HDC hdc=BeginPaint(hwnd,&ps);
-        RECT rc; GetClientRect(hwnd,&rc);
-        DrawGdiChart(hdc,rc,g_chartRange);
-        EndPaint(hwnd,&ps);
-        return 0;
-    }
-    case WM_ERASEBKGND: return 1;
-    }
-    return DefWindowProcA(hwnd,msg,wParam,lParam);
-}
-
-/* ============================================================================
- * Custom-draw ListView — dark rows with severity-colored left margin
- * ============================================================================ */
-static void UpdateProcessList(void) {
-    if (!g_hProcList) return;
-    LvDelAll(g_hProcList);
+static void UpdProc(void){
+    if(!g_hProc)return;LvDelA(g_hProc);
     EnterCriticalSection(&g_csData);
     MemorySnapshot *s=&g_latestSnapshot;
     int i;
-    for (i=0;i<s->numProcesses;i++) {
+    for(i=0;i<s->numProcesses;i++){
         ProcessInfo *p=&s->topProcesses[i];
-        char rank[8],pid[12],commit[32],ws[32],growth[32];
-        snprintf(rank,sizeof(rank),"%d",i+1);
+        char rk[8],pid[12],cm[32],ws[32],gr[32];
+        snprintf(rk,sizeof(rk),"%d",i+1);
         snprintf(pid,sizeof(pid),"%lu",p->pid);
-        FmtMB(commit,sizeof(commit),p->commitSize);
-        FmtMB(ws,sizeof(ws),p->workingSet);
-        if (p->growthRateMBps>0.01)
-            snprintf(growth,sizeof(growth),"+%.1f MB/s",p->growthRateMBps);
-        else strcpy(growth,"-");
-
-        LVITEMA it; memset(&it,0,sizeof(it));
-        it.mask=LVIF_TEXT; it.iItem=i; it.pszText=rank;
-        LvInsertItem(g_hProcList,&it);
-        LvSetText(g_hProcList,i,1,pid);
-        LvSetText(g_hProcList,i,2,p->name);
-        LvSetText(g_hProcList,i,3,commit);
-        LvSetText(g_hProcList,i,4,ws);
-        LvSetText(g_hProcList,i,5,growth);
+        FmtMB(cm,sizeof(cm),p->commitSize);FmtMB(ws,sizeof(ws),p->workingSet);
+        snprintf(gr,sizeof(gr),p->growthRateMBps>0.01?"+%.1f MB/s":"-",p->growthRateMBps);
+        LVITEMA it;memset(&it,0,sizeof(it));it.mask=LVIF_TEXT;it.iItem=i;it.pszText=rk;
+        LvIns(g_hProc,&it);
+        LvSetTxt(g_hProc,i,1,pid);LvSetTxt(g_hProc,i,2,p->name);
+        LvSetTxt(g_hProc,i,3,cm);LvSetTxt(g_hProc,i,4,ws);LvSetTxt(g_hProc,i,5,gr);
     }
     LeaveCriticalSection(&g_csData);
 }
-
-static void UpdateAnomalyList(void) {
-    if (!g_hAnomalyList) return;
-    LvDelAll(g_hAnomalyList);
+static void UpdAnom(void){
+    if(!g_hAnom)return;LvDelA(g_hAnom);
     EnterCriticalSection(&g_csData);
     int i;
-    for (i=0;i<g_anomalyCount;i++) {
+    for(i=0;i<g_anomalyCount;i++){
         AnomalyAlert *a=&g_anomalies[i];
-        char timeStr[32],typeStr[16],pidStr[12],valueStr[32];
-        FmtTime(timeStr,sizeof(timeStr),a->timestamp);
-        switch (a->type) {
-        case ANOMALY_CPU_HOG:    strcpy(typeStr,"CPU Hog"); break;
-        case ANOMALY_MEM_HOG:    strcpy(typeStr,"Mem Hog"); break;
-        case ANOMALY_MEM_LEAK:   strcpy(typeStr,"Mem Leak"); break;
-        case ANOMALY_GPU_HOG:    strcpy(typeStr,"GPU Hog"); break;
-        case ANOMALY_SUSPICIOUS: strcpy(typeStr,"Suspicious"); break;
-        default:                 strcpy(typeStr,"Unknown"); break;
+        char ts[32],ty[32],pid[12],vl[32];
+        FmtTime(ts,sizeof(ts),a->timestamp);
+        switch(a->type){
+        case ANOMALY_CPU_HOG:strcpy(ty,L10N(K_ANOM_CPU_HOG));break;
+        case ANOMALY_MEM_HOG:strcpy(ty,L10N(K_ANOM_MEM_HOG));break;
+        case ANOMALY_MEM_LEAK:strcpy(ty,L10N(K_ANOM_MEM_LEAK));break;
+        case ANOMALY_GPU_HOG:strcpy(ty,L10N(K_ANOM_GPU_HOG));break;
+        case ANOMALY_SUSPICIOUS:strcpy(ty,L10N(K_ANOM_SUSPICIOUS));break;
+        default:strcpy(ty,L10N(K_ANOM_UNKNOWN));break;
         }
-        snprintf(pidStr,sizeof(pidStr),"%lu",a->pid);
-        snprintf(valueStr,sizeof(valueStr),"%.1f",a->value);
-
-        LVITEMA it; memset(&it,0,sizeof(it));
-        it.mask=LVIF_TEXT; it.iItem=i; it.pszText=timeStr;
-        LvInsertItem(g_hAnomalyList,&it);
-        LvSetText(g_hAnomalyList,i,1,typeStr);
-        LvSetText(g_hAnomalyList,i,2,pidStr);
-        LvSetText(g_hAnomalyList,i,3,a->procName);
-        LvSetText(g_hAnomalyList,i,4,valueStr);
-        LvSetText(g_hAnomalyList,i,5,a->description);
+        snprintf(pid,sizeof(pid),"%lu",a->pid);
+        snprintf(vl,sizeof(vl),"%.1f",a->value);
+        LVITEMA it;memset(&it,0,sizeof(it));it.mask=LVIF_TEXT;it.iItem=i;it.pszText=ts;
+        LvIns(g_hAnom,&it);
+        LvSetTxt(g_hAnom,i,1,ty);LvSetTxt(g_hAnom,i,2,pid);
+        LvSetTxt(g_hAnom,i,3,a->procName);LvSetTxt(g_hAnom,i,4,vl);
+        LvSetTxt(g_hAnom,i,5,a->description);
     }
     LeaveCriticalSection(&g_csData);
 }
-
-static void UpdateSuspiciousList(void) {
-    if (!g_hSuspList) return;
-    LvDelAll(g_hSuspList);
+static void UpdSusp(void){
+    if(!g_hSusp)return;LvDelA(g_hSusp);
     EnterCriticalSection(&g_csData);
     int i;
-    for (i=0;i<g_suspProcCount;i++) {
+    for(i=0;i<g_suspProcCount;i++){
         SuspiciousProc *sp=&g_suspProcs[i];
-        char pidStr[12],firstMB[32],lastMB[32],growthMB[32];
-        char rateStr[32],firstSeen[32],lastSeen[32],alerts[8];
-        snprintf(pidStr,sizeof(pidStr),"%lu",sp->pid);
-        FmtMB(firstMB,sizeof(firstMB),sp->firstCommit);
-        FmtMB(lastMB,sizeof(lastMB),sp->lastCommit);
+        char pid[12],fst[32],lst[32],grw[32],rt[32],fs[32],ls[32],al[8];
+        snprintf(pid,sizeof(pid),"%lu",sp->pid);
+        FmtMB(fst,sizeof(fst),sp->firstCommit);FmtMB(lst,sizeof(lst),sp->lastCommit);
         SIZE_T gb=sp->lastCommit>sp->firstCommit?(sp->lastCommit-sp->firstCommit):0;
-        FmtMB(growthMB,sizeof(growthMB),gb);
-        snprintf(rateStr,sizeof(rateStr),"%.1f MB/s",sp->peakGrowthRate);
-        FmtTime(firstSeen,sizeof(firstSeen),sp->firstSeen);
-        FmtTime(lastSeen,sizeof(lastSeen),sp->lastSeen);
-        snprintf(alerts,sizeof(alerts),"%d",sp->alertCount);
-
-        LVITEMA it; memset(&it,0,sizeof(it));
-        it.mask=LVIF_TEXT; it.iItem=i; it.pszText=pidStr;
-        LvInsertItem(g_hSuspList,&it);
-        LvSetText(g_hSuspList,i,1,sp->name);
-        LvSetText(g_hSuspList,i,2,firstMB);
-        LvSetText(g_hSuspList,i,3,lastMB);
-        LvSetText(g_hSuspList,i,4,growthMB);
-        LvSetText(g_hSuspList,i,5,rateStr);
-        LvSetText(g_hSuspList,i,6,firstSeen);
-        LvSetText(g_hSuspList,i,7,lastSeen);
-        LvSetText(g_hSuspList,i,8,alerts);
+        FmtMB(grw,sizeof(grw),gb);
+        snprintf(rt,sizeof(rt),"%.1f MB/s",sp->peakGrowthRate);
+        FmtTime(fs,sizeof(fs),sp->firstSeen);FmtTime(ls,sizeof(ls),sp->lastSeen);
+        snprintf(al,sizeof(al),"%d",sp->alertCount);
+        LVITEMA it;memset(&it,0,sizeof(it));it.mask=LVIF_TEXT;it.iItem=i;it.pszText=pid;
+        LvIns(g_hSusp,&it);
+        LvSetTxt(g_hSusp,i,1,sp->name);LvSetTxt(g_hSusp,i,2,fst);LvSetTxt(g_hSusp,i,3,lst);
+        LvSetTxt(g_hSusp,i,4,grw);LvSetTxt(g_hSusp,i,5,rt);
+        LvSetTxt(g_hSusp,i,6,fs);LvSetTxt(g_hSusp,i,7,ls);LvSetTxt(g_hSusp,i,8,al);
     }
     LeaveCriticalSection(&g_csData);
 }
-
-static void UpdateActionList(void) {
-    if (!g_hActionList) return;
-    LvDelAll(g_hActionList);
+static void UpdAct(void){
+    if(!g_hAct)return;LvDelA(g_hAct);
     EnterCriticalSection(&g_csData);
     int i;
-    for (i=0;i<g_actionCount;i++) {
+    for(i=0;i<g_actionCount;i++){
         ActionRecord *a=&g_actions[i];
-        char timeStr[32],bfStr[16],afStr[16],tcStr[8],fcStr[8],desc[512];
-        FmtTime(timeStr,sizeof(timeStr),a->timestamp);
-        /* Show delta */
+        char ts[32],bf[16],af[16],tc[8],fc[8],desc[512];
+        FmtTime(ts,sizeof(ts),a->timestamp);
         int delta=(int)a->pageFileBefore-(int)a->pageFileAfter;
-        snprintf(bfStr,sizeof(bfStr),"%lu%%",a->pageFileBefore);
-        snprintf(afStr,sizeof(afStr),"%lu%% %s",a->pageFileAfter,delta>0?"":delta<0?"":">");
-        snprintf(tcStr,sizeof(tcStr),"%d",a->trimmedCount);
-        snprintf(fcStr,sizeof(fcStr),"%d",a->failedCount);
+        snprintf(bf,sizeof(bf),"%lu%%",a->pageFileBefore);
+        snprintf(af,sizeof(af),"%lu%%",a->pageFileAfter);
+        snprintf(tc,sizeof(tc),"%d",a->trimmedCount);
+        snprintf(fc,sizeof(fc),"%d",a->failedCount);
         snprintf(desc,sizeof(desc),"%s [%s%d%%]",
             a->description,delta>0?"-":"+",abs(delta));
-
-        LVITEMA it; memset(&it,0,sizeof(it));
-        it.mask=LVIF_TEXT; it.iItem=i; it.pszText=timeStr;
-        LvInsertItem(g_hActionList,&it);
-        LvSetText(g_hActionList,i,1,bfStr);
-        LvSetText(g_hActionList,i,2,afStr);
-        LvSetText(g_hActionList,i,3,tcStr);
-        LvSetText(g_hActionList,i,4,fcStr);
-        LvSetText(g_hActionList,i,5,desc);
+        LVITEMA it;memset(&it,0,sizeof(it));it.mask=LVIF_TEXT;it.iItem=i;it.pszText=ts;
+        LvIns(g_hAct,&it);
+        LvSetTxt(g_hAct,i,1,bf);LvSetTxt(g_hAct,i,2,af);
+        LvSetTxt(g_hAct,i,3,tc);LvSetTxt(g_hAct,i,4,fc);LvSetTxt(g_hAct,i,5,desc);
     }
     LeaveCriticalSection(&g_csData);
 }
-
-static void RefreshDesktopData(HWND hwnd) {
-    (void)hwnd;
-    UpdateProcessList();
-    UpdateAnomalyList();
-    UpdateSuspiciousList();
-    UpdateActionList();
-    if (g_hOverviewPane) InvalidateRect(g_hOverviewPane,NULL,TRUE);
-    if (g_hChartArea)    InvalidateRect(g_hChartArea,NULL,TRUE);
+static void Refresh(HWND hwnd){(void)hwnd;
+    UpdProc();UpdAnom();UpdSusp();UpdAct();
+    if(g_hOvPane)InvalidateRect(g_hOvPane,NULL,TRUE);
+    if(g_hChart)InvalidateRect(g_hChart,NULL,TRUE);
 }
 
 /* ============================================================================
  * Tab management
  * ============================================================================ */
-typedef enum { TAB_OVERVIEW=0, TAB_PROCESSES, TAB_CHART, TAB_ANOMALIES, TAB_SUSPICIOUS } TabIdx;
-
-static void ShowTab(TabIdx tab) {
-    int ov=(tab==TAB_OVERVIEW),pr=(tab==TAB_PROCESSES),ch=(tab==TAB_CHART);
-    int an=(tab==TAB_ANOMALIES),su=(tab==TAB_SUSPICIOUS);
-
-    ShowWindow(g_hOverviewPane,ov?SW_SHOW:SW_HIDE);
-    ShowWindow(g_hProcList,(ov||pr)?SW_SHOW:SW_HIDE);
-    ShowWindow(g_hActionList,ov?SW_SHOW:SW_HIDE);
-    ShowWindow(g_hChartArea,ch?SW_SHOW:SW_HIDE);
-    ShowWindow(g_hComboRange,ch?SW_SHOW:SW_HIDE);
-    ShowWindow(g_hLblChartRange,ch?SW_SHOW:SW_HIDE);
-    ShowWindow(g_hAnomalyList,an?SW_SHOW:SW_HIDE);
-    ShowWindow(g_hSuspList,su?SW_SHOW:SW_HIDE);
-
-    if (ch) InvalidateRect(g_hChartArea,NULL,TRUE);
-    if (ov) InvalidateRect(g_hOverviewPane,NULL,TRUE);
+typedef enum{TAB_OV=0,TAB_PR,TAB_CH,TAB_AN,TAB_SU}TabIdx;
+static void ShowTab(TabIdx t){
+    int ov=(t==TAB_OV),pr=(t==TAB_PR),ch=(t==TAB_CH),an=(t==TAB_AN),su=(t==TAB_SU);
+    ShowWindow(g_hOvPane,ov?SW_SHOW:SW_HIDE);
+    ShowWindow(g_hProc,(ov||pr)?SW_SHOW:SW_HIDE);
+    ShowWindow(g_hAct,ov?SW_SHOW:SW_HIDE);
+    ShowWindow(g_hChart,ch?SW_SHOW:SW_HIDE);
+    ShowWindow(g_hCbo,ch?SW_SHOW:SW_HIDE);
+    ShowWindow(g_hLblCbo,ch?SW_SHOW:SW_HIDE);
+    ShowWindow(g_hBtnBar,ch?SW_SHOW:SW_HIDE);
+    ShowWindow(g_hAnom,an?SW_SHOW:SW_HIDE);
+    ShowWindow(g_hSusp,su?SW_SHOW:SW_HIDE);
+    if(ch)InvalidateRect(g_hChart,NULL,TRUE);
+    if(ov)InvalidateRect(g_hOvPane,NULL,TRUE);
 }
 
 /* ============================================================================
- * ListView creation helper
+ * ListView creation (localized headers)
  * ============================================================================ */
-static HWND CreateLV(HWND parent, int x, int y, int w, int h,
-                     const char **hdrs, int nCols, int *widths) {
-    HWND lv=CreateWindowExA(0,WC_LISTVIEWA,NULL,
+static HWND MakeLV(HWND p,int x,int y,int w,int h,const char **hdr,int n,int *wd){
+    HWND lv=CreateWindowExW(0,WC_LISTVIEWW,NULL,
         WS_CHILD|WS_VISIBLE|LVS_REPORT|LVS_SINGLESEL|LVS_SHOWSELALWAYS,
-        x,y,w,h,parent,NULL,GetModuleHandleA(NULL),NULL);
-    LvSetExSt(lv,LVS_EX_FULLROWSELECT|LVS_EX_DOUBLEBUFFER|LVS_EX_GRIDLINES);
-
-    LV_COLUMNA col; int i;
-    for (i=0;i<nCols;i++) {
+        x,y,w,h,p,NULL,GetModuleHandleA(NULL),NULL);
+    LvExSt(lv,LVS_EX_FULLROWSELECT|LVS_EX_DOUBLEBUFFER|LVS_EX_GRIDLINES);
+    LV_COLUMNA col;int i;
+    for(i=0;i<n;i++){
         memset(&col,0,sizeof(col));
-        col.mask=LVCF_TEXT|LVCF_WIDTH|LVCF_FMT;
-        col.fmt=LVCFMT_LEFT; col.pszText=(LPSTR)hdrs[i]; col.cx=widths[i];
-        LvInsertCol(lv,i,&col);
+        col.mask=LVCF_TEXT|LVCF_WIDTH|LVCF_FMT;col.fmt=LVCFMT_LEFT;
+        col.pszText=(LPSTR)hdr[i];col.cx=wd[i];
+        LvInsCol(lv,i,&col);
     }
-    /* Dark background for listview */
     ListView_SetBkColor(lv,CLR_CARD);
     ListView_SetTextBkColor(lv,CLR_CARD);
     ListView_SetTextColor(lv,CLR_TEXT2);
@@ -696,227 +693,233 @@ static HWND CreateLV(HWND parent, int x, int y, int w, int h,
 }
 
 /* ============================================================================
- * Status bar update
+ * Status bar
  * ============================================================================ */
-static void UpdateStatusBar(HWND hwnd) {
-    (void)hwnd;
-    if (!g_hStatusBar) return;
-    char txt[512];
+static void UpdSts(HWND hwnd){(void)hwnd;
+    if(!g_hSts)return;char txt[512];
     DWORD pf=g_latestSnapshot.pageFilePct,ph=g_latestSnapshot.physLoad;
     DWORD idle=g_latestSnapshot.idleSeconds;
-    snprintf(txt,sizeof(txt),
-        L10N(K_STATUS_FMT),
-        pf,ph,idle,g_httpPort);
+    snprintf(txt,sizeof(txt),L10N(K_STATUS_FMT),pf,ph,idle,g_httpPort);
     int bl=(int)strlen(txt);
     FmtDur(txt+bl,sizeof(txt)-bl,time(NULL)-g_tStartTime);
-    SendMessageA(g_hStatusBar,SB_SETTEXTA,0,(LPARAM)txt);
+    SendMessageA(g_hSts,SB_SETTEXTA,0,(LPARAM)txt);
 }
 
 /* ============================================================================
- * Main window procedure
+ * Window class names (constants, not localized)
  * ============================================================================ */
-static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-    switch (msg) {
-    case WM_CREATE: {
+static const WCHAR *WC_MAIN=L"VMManagerDesktopW";
+static const WCHAR *WC_OV=L"VMOverviewPaneW";
+static const WCHAR *WC_CHART=L"VMChartAreaW";
+
+/* ============================================================================
+ * WndProc (Unicode)
+ * ============================================================================ */
+static LRESULT CALLBACK WndProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
+    switch(msg){
+    case WM_CREATE:{
         InitCommonControls();
-        g_hDesktopWnd=hwnd;
+        g_hDsk=hwnd;
         EnableDarkTitleBar(hwnd);
 
-        /* Fonts — use CJK-capable typeface so Chinese renders correctly.
-         * On zh-CN/zh-TW Windows, "Microsoft YaHei" / "Microsoft JhengHei" are
-         * always present and support the full CJK range. Segoe UI is secondary
-         * for Western glyphs, but is buggy with Chinese on some Win10 builds. */
+        /* CJK-capable fonts with ANTIALIASED_QUALITY for GDI */
         {
-            LocaleId loc = LocaleGet();
-            const char *uiFace = (loc == LOC_ZH_TW) ?
-                "Microsoft JhengHei" : "Microsoft YaHei";
-            const char *titleFace = (loc == LOC_ZH_TW) ?
-                "Microsoft JhengHei" : "Microsoft YaHei";
-
-            g_hGuiFont=CreateFontA(15,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,
+            LocaleId loc=LocaleGet();
+            const char *face=(loc==LOC_ZH_TW)?"Microsoft JhengHei":"Microsoft YaHei";
+            g_hFnt=CreateFontA(14,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,
                 DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,
-                CLEARTYPE_QUALITY,FF_DONTCARE,uiFace);
-            g_hTitleFont=CreateFontA(18,0,0,0,FW_SEMIBOLD,FALSE,FALSE,FALSE,
+                ANTIALIASED_QUALITY,FF_DONTCARE,face);
+            g_hTitleFnt=CreateFontA(18,0,0,0,FW_SEMIBOLD,FALSE,FALSE,FALSE,
                 DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,
-                CLEARTYPE_QUALITY,FF_DONTCARE,titleFace);
-            g_hMonoFont=CreateFontA(13,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,
+                ANTIALIASED_QUALITY,FF_DONTCARE,face);
+            g_hMonoFnt=CreateFontA(13,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,
                 DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,
-                CLEARTYPE_QUALITY,FF_DONTCARE,"Consolas");
+                ANTIALIASED_QUALITY,FF_DONTCARE,"Consolas");
         }
 
-        RECT rc; GetClientRect(hwnd,&rc);
+        RECT rc;GetClientRect(hwnd,&rc);
         int cw=rc.right-rc.left,ch=rc.bottom-rc.top;
 
-        /* ---- Top bar: tabs + buttons ---- */
-        g_hTab=CreateWindowExA(0,WC_TABCONTROLA,NULL,
+        /* Tab */
+        g_hTab=CreateWindowExW(0,WC_TABCONTROLW,NULL,
             WS_CHILD|WS_VISIBLE|TCS_FIXEDWIDTH,
             8,6,cw-16,28,hwnd,(HMENU)IDC_TAB,
             GetModuleHandleA(NULL),NULL);
-        SendMessageA(g_hTab,WM_SETFONT,(WPARAM)g_hGuiFont,TRUE);
+        SendMessageW(g_hTab,WM_SETFONT,(WPARAM)g_hFnt,TRUE);
         {
-            TCITEMA tci; memset(&tci,0,sizeof(tci)); tci.mask=TCIF_TEXT;
-            tci.pszText=L10N(K_TAB_OVERVIEW);  TcInsItem(g_hTab,TAB_OVERVIEW,&tci);
-            tci.pszText=L10N(K_TAB_PROCESSES); TcInsItem(g_hTab,TAB_PROCESSES,&tci);
-            tci.pszText=L10N(K_TAB_CHARTS);    TcInsItem(g_hTab,TAB_CHART,&tci);
-            tci.pszText=L10N(K_TAB_ANOMALIES);  TcInsItem(g_hTab,TAB_ANOMALIES,&tci);
-            tci.pszText=L10N(K_TAB_SUSPICIOUS); TcInsItem(g_hTab,TAB_SUSPICIOUS,&tci);
+            TCITEMW tci;memset(&tci,0,sizeof(tci));tci.mask=TCIF_TEXT;
+            tci.pszText=(LPWSTR)L10NW(K_TAB_OVERVIEW);
+            TcIns(g_hTab,TAB_OV,(const TCITEMA*)&tci);
+            tci.pszText=(LPWSTR)L10NW(K_TAB_PROCESSES);
+            TcIns(g_hTab,TAB_PR,(const TCITEMA*)&tci);
+            tci.pszText=(LPWSTR)L10NW(K_TAB_CHARTS);
+            TcIns(g_hTab,TAB_CH,(const TCITEMA*)&tci);
+            tci.pszText=(LPWSTR)L10NW(K_TAB_ANOMALIES);
+            TcIns(g_hTab,TAB_AN,(const TCITEMA*)&tci);
+            tci.pszText=(LPWSTR)L10NW(K_TAB_SUSPICIOUS);
+            TcIns(g_hTab,TAB_SU,(const TCITEMA*)&tci);
         }
 
-        /* Top-right buttons */
-        g_hBtnCleanup=CreateWindowExA(0,"BUTTON",L10N(K_BTN_CLEANUP),
+        /* Buttons */
+        g_hClnup=CreateWindowExW(0,L"BUTTON",L10NW(K_BTN_CLEANUP),
             WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON|BS_FLAT,
             cw-340,8,100,26,hwnd,(HMENU)IDC_BTN_CLEANUP,
             GetModuleHandleA(NULL),NULL);
-        SendMessageA(g_hBtnCleanup,WM_SETFONT,(WPARAM)g_hGuiFont,TRUE);
+        SendMessageW(g_hClnup,WM_SETFONT,(WPARAM)g_hFnt,TRUE);
 
-        HWND btnExit=CreateWindowExA(0,"BUTTON",L10N(K_BTN_EXIT),
+        HWND btnX=CreateWindowExW(0,L"BUTTON",L10NW(K_BTN_EXIT),
             WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON|BS_FLAT,
             cw-120,8,100,26,hwnd,(HMENU)IDC_BTN_EXIT,
             GetModuleHandleA(NULL),NULL);
-        SendMessageA(btnExit,WM_SETFONT,(WPARAM)g_hGuiFont,TRUE);
+        SendMessageW(btnX,WM_SETFONT,(WPARAM)g_hFnt,TRUE);
 
-        /* Chart controls (initially hidden) */
-        g_hLblChartRange=CreateWindowExA(0,"STATIC",L10N(K_CHART_RANGE_LBL),
+        /* Chart controls (hidden by default) */
+        g_hLblCbo=CreateWindowExW(0,L"STATIC",L10NW(K_CHART_RANGE_LBL),
             WS_CHILD|SS_LEFT,16,42,80,20,hwnd,NULL,
             GetModuleHandleA(NULL),NULL);
-        SendMessageA(g_hLblChartRange,WM_SETFONT,(WPARAM)g_hGuiFont,TRUE);
-        ShowWindow(g_hLblChartRange,SW_HIDE);
+        SendMessageW(g_hLblCbo,WM_SETFONT,(WPARAM)g_hFnt,TRUE);
+        ShowWindow(g_hLblCbo,SW_HIDE);
 
-        g_hComboRange=CreateWindowExA(0,"COMBOBOX",NULL,
+        g_hCbo=CreateWindowExW(0,L"COMBOBOX",NULL,
             WS_CHILD|CBS_DROPDOWNLIST|WS_VSCROLL,
-            100,40,140,200,hwnd,(HMENU)IDC_COMBO_RANGE,
+            100,40,135,200,hwnd,(HMENU)IDC_COMBO_RANGE,
             GetModuleHandleA(NULL),NULL);
-        SendMessageA(g_hComboRange,WM_SETFONT,(WPARAM)g_hGuiFont,TRUE);
-        SendMessageA(g_hComboRange,CB_ADDSTRING,0,(LPARAM)L10N(K_CHART_RANGE_DAY));
-        SendMessageA(g_hComboRange,CB_ADDSTRING,0,(LPARAM)L10N(K_CHART_RANGE_WEEK));
-        SendMessageA(g_hComboRange,CB_ADDSTRING,0,(LPARAM)L10N(K_CHART_RANGE_MONTH));
-        SendMessageA(g_hComboRange,CB_ADDSTRING,0,(LPARAM)L10N(K_CHART_RANGE_YEAR));
-        SendMessageA(g_hComboRange,CB_SETCURSEL,CHART_WEEK,0);
-        ShowWindow(g_hComboRange,SW_HIDE);
+        SendMessageW(g_hCbo,WM_SETFONT,(WPARAM)g_hFnt,TRUE);
+        SendMessageW(g_hCbo,CB_ADDSTRING,0,(LPARAM)L10NW(K_CHART_RANGE_DAY));
+        SendMessageW(g_hCbo,CB_ADDSTRING,0,(LPARAM)L10NW(K_CHART_RANGE_WEEK));
+        SendMessageW(g_hCbo,CB_ADDSTRING,0,(LPARAM)L10NW(K_CHART_RANGE_MONTH));
+        SendMessageW(g_hCbo,CB_ADDSTRING,0,(LPARAM)L10NW(K_CHART_RANGE_YEAR));
+        SendMessageW(g_hCbo,CB_SETCURSEL,CHART_WEEK,0);
+        ShowWindow(g_hCbo,SW_HIDE);
 
-        /* Content area — starts below tab bar */
-        int ct=44, cl=8, cright=cw-16;
+        /* Bar/Line toggle button */
+        g_hBtnBar=CreateWindowExW(0,L"BUTTON",L"Line / Bar",
+            WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON|BS_FLAT,
+            250,40,80,22,hwnd,(HMENU)5001,
+            GetModuleHandleA(NULL),NULL);
+        SendMessageW(g_hBtnBar,WM_SETFONT,(WPARAM)g_hFnt,TRUE);
+        ShowWindow(g_hBtnBar,SW_HIDE);
 
-        /* Overview pane (custom drawn cards) */
+        int ct=44,cl=8,cright=cw-16;
+
+        /* Register custom pane classes (Unicode) */
         {
-            WNDCLASSA ocls; memset(&ocls,0,sizeof(ocls));
-            ocls.lpfnWndProc=OverviewProc;
-            ocls.hInstance=GetModuleHandleA(NULL);
-            ocls.hCursor=LoadCursor(NULL,IDC_ARROW);
-            ocls.hbrBackground=CreateSolidBrush(CLR_BG);
-            ocls.lpszClassName="VMOverviewPane";
-            RegisterClassA(&ocls);
-            g_hOverviewPane=CreateWindowExA(0,"VMOverviewPane",NULL,
-                WS_CHILD|WS_VISIBLE,
-                cl,ct,cright,88,hwnd,NULL,GetModuleHandleA(NULL),NULL);
+            WNDCLASSW cls;memset(&cls,0,sizeof(cls));
+            cls.lpfnWndProc=OverviewProc;cls.hInstance=GetModuleHandleA(NULL);
+            cls.hCursor=LoadCursorA(NULL,(LPCSTR)IDC_ARROW);
+            cls.hbrBackground=CreateSolidBrush(CLR_BG);
+            cls.lpszClassName=WC_OV;RegisterClassW(&cls);
+        }
+        {
+            WNDCLASSW cls;memset(&cls,0,sizeof(cls));
+            cls.lpfnWndProc=ChartProc;cls.hInstance=GetModuleHandleA(NULL);
+            cls.hCursor=LoadCursorA(NULL,(LPCSTR)IDC_ARROW);
+            cls.hbrBackground=CreateSolidBrush(CLR_CARD);
+            cls.lpszClassName=WC_CHART;RegisterClassW(&cls);
         }
 
-        /* Process list — used in Overview + Processes tabs */
+        /* Overview pane */
+        g_hOvPane=CreateWindowExW(0,WC_OV,NULL,
+            WS_CHILD|WS_VISIBLE,cl,ct,cright,88,
+            hwnd,NULL,GetModuleHandleA(NULL),NULL);
+
+        /* Process list */
         {
-            const char *hdr[]={"#","PID","Name","Commit","WS","Growth"};
+            const char *hdr[]={L10N(K_HDR_RANK),L10N(K_HDR_PID),L10N(K_HDR_NAME),
+                L10N(K_HDR_COMMIT),L10N(K_HDR_WS),L10N(K_HDR_GROWTH)};
             int wd[]={36,70,180,110,110,100};
-            g_hProcList=CreateLV(hwnd,cl,ct+96,cright,ch-ct-350,hdr,6,wd);
+            g_hProc=MakeLV(hwnd,cl,ct+96,cright,ch-ct-350,hdr,6,wd);
         }
 
-        /* Action log — Overview only, pinned bottom */
+        /* Action log */
         {
-            const char *hdr[]={"Time","Before","After","Trimmed","Failed","Description"};
+            const char *hdr[]={L10N(K_HDR_TIME),L10N(K_HDR_BEFORE),L10N(K_HDR_AFTER),
+                L10N(K_HDR_TRIMMED),L10N(K_HDR_FAILED),L10N(K_HDR_DESC)};
             int wd[]={130,60,70,60,50,260};
-            g_hActionList=CreateLV(hwnd,cl,ch-242,cright,200,hdr,6,wd);
+            g_hAct=MakeLV(hwnd,cl,ch-242,cright,200,hdr,6,wd);
         }
 
         /* Chart area */
-        {
-            WNDCLASSA ccls; memset(&ccls,0,sizeof(ccls));
-            ccls.lpfnWndProc=ChartProc;
-            ccls.hInstance=GetModuleHandleA(NULL);
-            ccls.hCursor=LoadCursor(NULL,IDC_ARROW);
-            ccls.hbrBackground=CreateSolidBrush(CLR_CARD);
-            ccls.lpszClassName="VMChartArea";
-            RegisterClassA(&ccls);
-            g_hChartArea=CreateWindowExA(0,"VMChartArea",NULL,
-                WS_CHILD|WS_VISIBLE|WS_BORDER,
-                cl,68,cright,ch-100,hwnd,(HMENU)IDC_CHART_AREA,
-                GetModuleHandleA(NULL),NULL);
-        }
+        g_hChart=CreateWindowExW(0,WC_CHART,NULL,
+            WS_CHILD|WS_VISIBLE|WS_BORDER,
+            cl,68,cright,ch-100,hwnd,(HMENU)IDC_CHART_AREA,
+            GetModuleHandleA(NULL),NULL);
 
         /* Anomaly list */
         {
-            const char *hdr[]={"Time","Type","PID","Process","Value","Description"};
+            const char *hdr[]={L10N(K_HDR_TIME),L10N(K_HDR_TYPE),L10N(K_HDR_PID),
+                L10N(K_HDR_PROCESS),L10N(K_HDR_VALUE),L10N(K_HDR_DESC)};
             int wd[]={130,90,55,130,65,300};
-            g_hAnomalyList=CreateLV(hwnd,cl,ct,cright,ch-ct-28,hdr,6,wd);
+            g_hAnom=MakeLV(hwnd,cl,ct,cright,ch-ct-28,hdr,6,wd);
         }
 
         /* Suspicious list */
         {
-            const char *hdr[]={"PID","Name","First","Last","Growth","Peak Rate","First Seen","Last Seen","Alerts"};
+            const char *hdr[]={L10N(K_HDR_PID),L10N(K_HDR_NAME),L10N(K_HDR_FIRST),
+                L10N(K_HDR_LAST),L10N(K_HDR_GROWTH),L10N(K_HDR_PEAK_RATE),
+                L10N(K_HDR_FIRST_SEEN),L10N(K_HDR_LAST_SEEN),L10N(K_HDR_ALERTS)};
             int wd[]={55,120,95,95,90,85,125,125,50};
-            g_hSuspList=CreateLV(hwnd,cl,ct,cright,ch-ct-28,hdr,9,wd);
+            g_hSusp=MakeLV(hwnd,cl,ct,cright,ch-ct-28,hdr,9,wd);
         }
 
         /* Status bar */
-        g_hStatusBar=CreateWindowExA(0,STATUSCLASSNAMEA,NULL,
+        g_hSts=CreateWindowExW(0,STATUSCLASSNAMEW,NULL,
             WS_CHILD|WS_VISIBLE|SBARS_SIZEGRIP,
             0,0,0,0,hwnd,NULL,GetModuleHandleA(NULL),NULL);
-        SendMessageA(g_hStatusBar,WM_SETFONT,(WPARAM)g_hGuiFont,TRUE);
+        SendMessageW(g_hSts,WM_SETFONT,(WPARAM)g_hFnt,TRUE);
 
-        /* Done creating all controls */
-
-        ShowTab(TAB_OVERVIEW);
+        ShowTab(TAB_OV);
         AddTrayIcon(hwnd);
         SetTimer(hwnd,IDT_DESKTOP_REFRESH,DESKTOP_REFRESH_MS,NULL);
         return 0;
     }
 
-    case WM_NOTIFY: {
-        NMHDR *nm=(NMHDR*)lParam;
-        if (nm->idFrom==IDC_TAB && nm->code==TCN_SELCHANGE) {
-            int sel=TcGetSel(g_hTab);
-            switch (sel) {
-            case 0: ShowTab(TAB_OVERVIEW); break;
-            case 1: ShowTab(TAB_PROCESSES); break;
-            case 2: ShowTab(TAB_CHART); break;
-            case 3: ShowTab(TAB_ANOMALIES); break;
-            case 4: ShowTab(TAB_SUSPICIOUS); break;
+    case WM_NOTIFY:{
+        NMHDR *nm=(NMHDR*)lp;
+        if(nm->idFrom==IDC_TAB&&nm->code==TCN_SELCHANGE){
+            int sel=TcSel(g_hTab);
+            switch(sel){
+            case 0:ShowTab(TAB_OV);break;case 1:ShowTab(TAB_PR);break;
+            case 2:ShowTab(TAB_CH);break;case 3:ShowTab(TAB_AN);break;
+            case 4:ShowTab(TAB_SU);break;
             }
-            RefreshDesktopData(hwnd);
+            Refresh(hwnd);
         }
-        /* Custom draw for ListViews */
-        if (nm->code==NM_CUSTOMDRAW) {
-            NMLVCUSTOMDRAW *lcd=(NMLVCUSTOMDRAW*)lParam;
-            if (nm->idFrom==GetDlgCtrlID(g_hAnomalyList)) {
-                switch (lcd->nmcd.dwDrawStage) {
-                case CDDS_PREPAINT: SetWindowLongPtrA(hwnd,DWLP_MSGRESULT,CDRF_NOTIFYITEMDRAW); return CDRF_NOTIFYITEMDRAW;
-                case CDDS_ITEMPREPAINT: {
+        if(nm->code==NM_CUSTOMDRAW){
+            NMLVCUSTOMDRAW *lcd=(NMLVCUSTOMDRAW*)lp;
+            if(nm->idFrom==GetDlgCtrlID(g_hAnom)){
+                switch(lcd->nmcd.dwDrawStage){
+                case CDDS_PREPAINT:
+                    SetWindowLongPtrA(hwnd,DWLP_MSGRESULT,CDRF_NOTIFYITEMDRAW);
+                    return CDRF_NOTIFYITEMDRAW;
+                case CDDS_ITEMPREPAINT:{
                     int idx=(int)lcd->nmcd.dwItemSpec;
-                    lcd->clrTextBk=idx%2==0?CLR_CARD:CLR_CARD2;
-                    lcd->clrText=CLR_TEXT2;
-                    /* Red bar for severity */
+                    lcd->clrTextBk=idx%2==0?CLR_CARD:CLR_CARD2;lcd->clrText=CLR_TEXT2;
                     AnomalyAlert *a2=NULL;
                     EnterCriticalSection(&g_csData);
-                    if (idx<g_anomalyCount) a2=&g_anomalies[idx];
+                    if(idx<g_anomalyCount)a2=&g_anomalies[idx];
                     LeaveCriticalSection(&g_csData);
-                    if (a2) {
+                    if(a2){
                         COLORREF sev=CLR_RED;
-                        if (a2->type==ANOMALY_MEM_HOG||a2->type==ANOMALY_GPU_HOG) sev=CLR_YELLOW;
-                        RECT rc2; ListView_GetItemRect(nm->hwndFrom,idx,&rc2,LVIR_BOUNDS);
+                        if(a2->type==ANOMALY_MEM_HOG||a2->type==ANOMALY_GPU_HOG)sev=CLR_YELLOW;
+                        RECT rc2;ListView_GetItemRect(nm->hwndFrom,idx,&rc2,LVIR_BOUNDS);
                         HDC hdc=lcd->nmcd.hdc;
                         HBRUSH hb=CreateSolidBrush(sev);
                         RECT bar={rc2.left,rc2.top,rc2.left+3,rc2.bottom};
-                        FillRect(hdc,&bar,hb);
-                        DeleteObject(hb);
+                        FillRect(hdc,&bar,hb);DeleteObject(hb);
                     }
                     SetWindowLongPtrA(hwnd,DWLP_MSGRESULT,CDRF_NEWFONT);
                     return CDRF_NEWFONT;
                 }
                 }
             }
-            /* Other listviews: just alternating row colors */
-            if (nm->idFrom==GetDlgCtrlID(g_hProcList)||
-                nm->idFrom==GetDlgCtrlID(g_hSuspList)||
-                nm->idFrom==GetDlgCtrlID(g_hActionList)) {
-                switch (lcd->nmcd.dwDrawStage) {
-                case CDDS_PREPAINT: SetWindowLongPtrA(hwnd,DWLP_MSGRESULT,CDRF_NOTIFYITEMDRAW); return CDRF_NOTIFYITEMDRAW;
+            if(nm->idFrom==GetDlgCtrlID(g_hProc)||
+               nm->idFrom==GetDlgCtrlID(g_hSusp)||
+               nm->idFrom==GetDlgCtrlID(g_hAct)){
+                switch(lcd->nmcd.dwDrawStage){
+                case CDDS_PREPAINT:
+                    SetWindowLongPtrA(hwnd,DWLP_MSGRESULT,CDRF_NOTIFYITEMDRAW);
+                    return CDRF_NOTIFYITEMDRAW;
                 case CDDS_ITEMPREPAINT:
                     lcd->clrTextBk=((int)lcd->nmcd.dwItemSpec)%2==0?CLR_CARD:CLR_CARD2;
                     lcd->clrText=CLR_TEXT2;
@@ -928,137 +931,120 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         return 0;
     }
 
-    case WM_COMMAND: {
-        WORD id=LOWORD(wParam);
-        switch (id) {
-        case IDC_BTN_CLEANUP: CheckAndAct(); RefreshDesktopData(hwnd); break;
-        case IDC_BTN_EXIT:    DestroyWindow(hwnd); break;
+    case WM_COMMAND:{
+        WORD id=LOWORD(wp);
+        switch(id){
+        case IDC_BTN_CLEANUP:CheckAndAct();Refresh(hwnd);break;
+        case IDC_BTN_EXIT:DestroyWindow(hwnd);break;
+        case 5001:/* bar/line toggle */
+            g_chartMode=!g_chartMode;
+            SetWindowTextW(g_hBtnBar,g_chartMode?L"Bar" : L"Line");
+            InvalidateRect(g_hChart,NULL,TRUE);
+            break;
         case IDC_COMBO_RANGE:
-            if (HIWORD(wParam)==CBN_SELCHANGE) {
-                g_chartRange=(int)SendMessageA((HWND)lParam,CB_GETCURSEL,0,0);
-                InvalidateRect(g_hChartArea,NULL,TRUE);
+            if(HIWORD(wp)==CBN_SELCHANGE){
+                g_range=(int)SendMessageW((HWND)lp,CB_GETCURSEL,0,0);
+                InvalidateRect(g_hChart,NULL,TRUE);
             }
             break;
-        case IDM_SHOW:    ShowWindow(hwnd,SW_RESTORE); SetForegroundWindow(hwnd); break;
-        case IDM_CLEANUP: CheckAndAct(); RefreshDesktopData(hwnd); break;
-        case IDM_EXIT:    DestroyWindow(hwnd); break;
+        case IDM_SHOW:ShowWindow(hwnd,SW_RESTORE);SetForegroundWindow(hwnd);break;
+        case IDM_CLEANUP:CheckAndAct();Refresh(hwnd);break;
+        case IDM_EXIT:DestroyWindow(hwnd);break;
         }
         return 0;
     }
 
     case WM_TRAYICON:
-        if (LOWORD(lParam)==WM_RBUTTONUP) ShowTrayMenu(hwnd);
-        else if (LOWORD(lParam)==WM_LBUTTONDBLCLK) {
-            ShowWindow(hwnd,SW_RESTORE); SetForegroundWindow(hwnd);
+        if(LOWORD(lp)==WM_RBUTTONUP)ShowTrayMenu(hwnd);
+        else if(LOWORD(lp)==WM_LBUTTONDBLCLK){
+            ShowWindow(hwnd,SW_RESTORE);SetForegroundWindow(hwnd);
         }
         return 0;
 
     case WM_SYSCOMMAND:
-        if ((wParam&0xFFF0)==SC_MINIMIZE) {
+        if((wp&0xFFF0)==SC_MINIMIZE){
             ShowWindow(hwnd,SW_HIDE);
-            ShowTrayBalloon(hwnd,"VM Manager",
-                L10N(K_TRAY_BALLOON_MIN));
+            ShowTrayBalloon(hwnd,L"VM Manager",L10NW(K_TRAY_BALLOON_MIN));
             return 0;
         }
         break;
 
     case WM_CLOSE:
         ShowWindow(hwnd,SW_HIDE);
-        ShowTrayBalloon(hwnd,"VM Manager",
-            L10N(K_TRAY_BALLOON_CLOSE));
+        ShowTrayBalloon(hwnd,L"VM Manager",L10NW(K_TRAY_BALLOON_CLOSE));
         return 0;
 
     case WM_DESTROY:
-        KillTimer(hwnd,IDT_DESKTOP_REFRESH);
-        RemoveTrayIcon(hwnd);
-        PostQuitMessage(0);
+        KillTimer(hwnd,IDT_DESKTOP_REFRESH);RemoveTrayIcon(hwnd);PostQuitMessage(0);
         return 0;
 
     case WM_TIMER:
-        if (wParam==IDT_DESKTOP_REFRESH) {
-            RefreshDesktopData(hwnd);
-            UpdateStatusBar(hwnd);
-        }
+        if(wp==IDT_DESKTOP_REFRESH){Refresh(hwnd);UpdSts(hwnd);}
         return 0;
 
-    case WM_CTLCOLORSTATIC: {
-        HDC hdc=(HDC)wParam;
-        SetTextColor(hdc,CLR_MUTED);
-        SetBkColor(hdc,CLR_BG);
+    case WM_CTLCOLORSTATIC:
+        SetTextColor((HDC)wp,CLR_MUTED);SetBkColor((HDC)wp,CLR_BG);
         return (LRESULT)CreateSolidBrush(CLR_BG);
-    }
-    case WM_CTLCOLORBTN: {
-        HDC hdc=(HDC)wParam;
-        SetTextColor(hdc,CLR_TEXT2);
-        SetBkColor(hdc,CLR_CARD2);
+    case WM_CTLCOLORBTN:
+        SetTextColor((HDC)wp,CLR_TEXT2);SetBkColor((HDC)wp,CLR_CARD2);
         return (LRESULT)CreateSolidBrush(CLR_CARD2);
-    }
-    case WM_CTLCOLORLISTBOX: {
-        HDC hdc=(HDC)wParam;
-        SetTextColor(hdc,CLR_TEXT2);
-        SetBkColor(hdc,CLR_CARD);
+    case WM_CTLCOLORLISTBOX:
+        SetTextColor((HDC)wp,CLR_TEXT2);SetBkColor((HDC)wp,CLR_CARD);
         return (LRESULT)CreateSolidBrush(CLR_CARD);
-    }
 
-    case WM_SIZE: {
-        RECT rc; GetClientRect(hwnd,&rc);
+    case WM_SIZE:{
+        RECT rc;GetClientRect(hwnd,&rc);
         int cw=rc.right-rc.left,ch=rc.bottom-rc.top;
         int ct=44,cl=8,cright=cw-16;
-
-        if (g_hTab)         SetWindowPos(g_hTab,NULL,8,6,cw-16,28,SWP_NOZORDER);
-        if (g_hBtnCleanup)  SetWindowPos(g_hBtnCleanup,NULL,cw-340,8,100,26,SWP_NOZORDER);
-        { HWND btn=GetDlgItem(hwnd,IDC_BTN_EXIT); if(btn)SetWindowPos(btn,NULL,cw-120,8,100,26,SWP_NOZORDER); }
-        if (g_hOverviewPane)SetWindowPos(g_hOverviewPane,NULL,cl,ct,cright,88,SWP_NOZORDER);
-        if (g_hProcList)    SetWindowPos(g_hProcList,NULL,cl,ct+96,cright,ch-ct-350,SWP_NOZORDER);
-        if (g_hActionList)  SetWindowPos(g_hActionList,NULL,cl,ch-242,cright,200,SWP_NOZORDER);
-        if (g_hChartArea)   SetWindowPos(g_hChartArea,NULL,cl,68,cright,ch-100,SWP_NOZORDER);
-        if (g_hAnomalyList) SetWindowPos(g_hAnomalyList,NULL,cl,ct,cright,ch-ct-28,SWP_NOZORDER);
-        if (g_hSuspList)    SetWindowPos(g_hSuspList,NULL,cl,ct,cright,ch-ct-28,SWP_NOZORDER);
-        SendMessageA(g_hStatusBar,WM_SIZE,0,0);
+        if(g_hTab)      SetWindowPos(g_hTab,NULL,8,6,cw-16,28,SWP_NOZORDER);
+        if(g_hClnup)    SetWindowPos(g_hClnup,NULL,cw-340,8,100,26,SWP_NOZORDER);
+        {HWND btn=GetDlgItem(hwnd,IDC_BTN_EXIT);if(btn)SetWindowPos(btn,NULL,cw-120,8,100,26,SWP_NOZORDER);}
+        if(g_hOvPane)   SetWindowPos(g_hOvPane,NULL,cl,ct,cright,88,SWP_NOZORDER);
+        if(g_hProc)     SetWindowPos(g_hProc,NULL,cl,ct+96,cright,ch-ct-350,SWP_NOZORDER);
+        if(g_hAct)      SetWindowPos(g_hAct,NULL,cl,ch-242,cright,200,SWP_NOZORDER);
+        if(g_hChart)    SetWindowPos(g_hChart,NULL,cl,68,cright,ch-100,SWP_NOZORDER);
+        if(g_hAnom)     SetWindowPos(g_hAnom,NULL,cl,ct,cright,ch-ct-28,SWP_NOZORDER);
+        if(g_hSusp)     SetWindowPos(g_hSusp,NULL,cl,ct,cright,ch-ct-28,SWP_NOZORDER);
+        SendMessageW(g_hSts,WM_SIZE,0,0);
         return 0;
     }
     }
-
-    return DefWindowProcA(hwnd,msg,wParam,lParam);
+    return DefWindowProcW(hwnd,msg,wp,lp);
 }
 
 /* ============================================================================
- * RunDesktop
+ * RunDesktop (Unicode window creation)
  * ============================================================================ */
-int RunDesktop(void) {
+int RunDesktop(void){
     g_bDesktop=TRUE;
 
-    WNDCLASSA wc; memset(&wc,0,sizeof(wc));
+    WNDCLASSW wc;memset(&wc,0,sizeof(wc));
     wc.lpfnWndProc=WndProc;
     wc.hInstance=GetModuleHandleA(NULL);
-    wc.hCursor=LoadCursor(NULL,IDC_ARROW);
+    wc.hCursor=LoadCursorA(NULL,(LPCSTR)IDC_ARROW);
     wc.hbrBackground=CreateSolidBrush(CLR_BG);
-    wc.lpszClassName="VMManagerDesktop";
-    wc.hIcon=LoadIcon(NULL,IDI_INFORMATION);
-    if (!RegisterClassA(&wc)&&GetLastError()!=ERROR_CLASS_ALREADY_EXISTS) return 1;
+    wc.lpszClassName=WC_MAIN;
+    wc.hIcon=LoadIconA(NULL,(LPCSTR)IDI_APPLICATION);
+    if(!RegisterClassW(&wc)&&GetLastError()!=ERROR_CLASS_ALREADY_EXISTS)return 1;
 
-    /* Use CreateWindowExW so the title bar renders Unicode correctly.
-     * The window class is still ANSI but the title accepts WCHAR. */
-    HWND hwnd=CreateWindowExW(0,
-        L"VMManagerDesktop",
+    HWND hwnd=CreateWindowExW(0,WC_MAIN,
         L10NW(K_WIN_TITLE_MAIN),
         WS_OVERLAPPEDWINDOW|WS_CLIPCHILDREN,
         CW_USEDEFAULT,CW_USEDEFAULT,1080,760,
         NULL,NULL,GetModuleHandleA(NULL),NULL);
-    if (!hwnd) return 1;
+    if(!hwnd)return 1;
 
-    ShowWindow(hwnd,SW_SHOW); UpdateWindow(hwnd);
+    ShowWindow(hwnd,SW_SHOW);UpdateWindow(hwnd);
 
-    /* Start engine if needed */
-    if (!g_hHttpThread) {
+    if(!g_hHttpThread){
         g_hHttpThread=CreateThread(NULL,0,HttpServerThread,NULL,0,NULL);
-        int wc2=0; while (g_httpPort==0&&wc2<30){Sleep(100);wc2++;}
+        int wc2=0;while(g_httpPort==0&&wc2<30){Sleep(100);wc2++;}
     }
 
     CheckAndAct();
 
     MSG msg;
-    while (GetMessageA(&msg,NULL,0,0)) { TranslateMessage(&msg); DispatchMessageA(&msg); }
+    while(GetMessageW(&msg,NULL,0,0)){TranslateMessage(&msg);DispatchMessageW(&msg);}
 
     g_bRunning=FALSE;
     RemoveTrayIcon(hwnd);
