@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VM Manager v5.1</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Segoe UI','Microsoft YaHei','Microsoft JhengHei',system-ui,sans-serif;background:#0d1117;color:#c9d1d9;min-height:100vh}
+.header{background:#161b22;border-bottom:1px solid #30363d;padding:12px 24px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
+.header h1{font-size:20px;color:#58a6ff}
+.header .info{font-size:13px;color:#8b949e}
+.status-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#3fb950;margin-right:4px;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;padding:20px 24px}
+.card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:20px}
+.card h2{font-size:15px;color:#58a6ff;margin-bottom:16px;border-bottom:1px solid #30363d;padding-bottom:8px}
+.gauge-container{display:flex;justify-content:space-around;align-items:center;flex-wrap:wrap;gap:16px}
+.gauge{text-align:center}
+.gauge canvas{display:block}
+.gauge-label{font-size:13px;color:#8b949e;margin-top:4px}
+.metric-row{display:flex;justify-content:space-between;padding:6px 0;font-size:13px;border-bottom:1px solid #21262d}
+.metric-row .label{color:#8b949e}
+.metric-row .value{color:#e6edf3;font-weight:600}
+.danger{color:#f85149!important}
+.warning{color:#d29922!important}
+.success{color:#3fb950!important}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th,td{padding:8px 6px;text-align:left;border-bottom:1px solid #21262d}
+th{color:#8b949e;font-weight:600;position:sticky;top:0;background:#161b22}
+tr:hover{background:#1c2129}
+.process-name{max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.scroll-table{max-height:420px;overflow-y:auto}
+.log-entry{font-size:12px;padding:4px 0;border-bottom:1px solid #21262d;display:flex;gap:12px}
+.log-time{color:#8b949e;white-space:nowrap}
+.chart-container{position:relative;width:100%;height:220px}
+canvas{max-width:100%}
+.search-box{width:100%;padding:8px 12px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:13px;margin-bottom:12px}
+.search-box:focus{outline:none;border-color:#58a6ff}
+.error-banner{background:#490202;color:#f85149;padding:12px 24px;font-size:14px;display:none}
+.full-width{grid-column:1/-1}
+.tab-bar{display:flex;gap:2px;margin-bottom:12px}
+.tab-btn{padding:6px 16px;background:#21262d;border:1px solid #30363d;color:#8b949e;cursor:pointer;font-size:13px;border-radius:4px 4px 0 0}
+.tab-btn.active{background:#161b22;color:#58a6ff;border-bottom-color:#161b22}
+.footer{text-align:center;padding:16px;color:#484f58;font-size:11px;border-top:1px solid #30363d;margin-top:20px}
+.badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700}
+.badge-danger{background:#490202;color:#f85149}
+.badge-warn{background:#3d2e00;color:#d29922}
+.badge-ok{background:#033a16;color:#3fb950}
+.lang-switch{display:inline-flex;gap:4px;margin-left:12px}
+.lang-btn{padding:2px 8px;background:#21262d;border:1px solid #30363d;color:#8b949e;cursor:pointer;font-size:11px;border-radius:3px}
+.lang-btn.active{background:#58a6ff;color:#fff;border-color:#58a6ff}
+</style>
+</head>
+<body>
+<div class="header">
+<div>
+<h1><span class="status-dot" id="status-dot"></span><span data-i18n="app_title">VM Manager v5.1</span></h1>
+<span class="info" data-i18n="app_subtitle">Memory Monitor &amp; Suspicious Process Detector</span>
+</div>
+<div class="info">
+<div data-i18n="uptime">Uptime:</div> <span id="uptime">--</span>
+<span class="lang-switch">
+<button class="lang-btn" onclick="setLang('en')" id="lang-en">EN</button>
+<button class="lang-btn" onclick="setLang('zh-CN')" id="lang-zh-CN">简中</button>
+<button class="lang-btn" onclick="setLang('zh-TW')" id="lang-zh-TW">繁中</button>
+</span>
+</div>
+</div>
+</div>
+<div class="error-banner" id="error-banner"></div>
+
+<div class="grid">
+<!-- Memory gauges -->
+<div class="card">
+<h2 data-i18n="card_memory">Memory Overview</h2>
+<div class="gauge-container">
+<div class="gauge">
+<canvas id="gauge-pf" width="140" height="140"></canvas>
+<div class="gauge-label" data-i18n="gauge_pf">Page File Usage</div>
+<div style="font-size:20px;font-weight:700" id="gauge-pf-pct">--</div>
+</div>
+<div class="gauge">
+<canvas id="gauge-phys" width="140" height="140"></canvas>
+<div class="gauge-label" data-i18n="gauge_phys">Physical Memory Load</div>
+<div style="font-size:20px;font-weight:700" id="gauge-phys-pct">--</div>
+</div>
+</div>
+</div>
+
+<!-- System info -->
+<div class="card">
+<h2 data-i18n="card_sysinfo">System Info</h2>
+<div class="metric-row"><span class="label" data-i18n="sys_total_phys">Total Physical</span><span class="value" id="sys-total-phys">--</span></div>
+<div class="metric-row"><span class="label" data-i18n="sys_avail_phys">Avail Physical</span><span class="value" id="sys-avail-phys">--</span></div>
+<div class="metric-row"><span class="label" data-i18n="sys_total_pf">Total Page File</span><span class="value" id="sys-total-pf">--</span></div>
+<div class="metric-row"><span class="label" data-i18n="sys_avail_pf">Avail Page File</span><span class="value" id="sys-avail-pf">--</span></div>
+<div class="metric-row"><span class="label" data-i18n="sys_idle">System Idle</span><span class="value" id="sys-idle">--</span></div>
+<div class="metric-row"><span class="label" data-i18n="sys_threshold">Trigger Threshold</span><span class="value" data-i18n="sys_threshold_val">5 min idle + 85% PF</span></div>
+<div class="metric-row"><span class="label" data-i18n="sys_encrypt">Encryption</span><span class="value success" data-i18n="sys_encrypt_val">DPAPI (user-bound)</span></div>
+</div>
+
+<!-- History chart -->
+<div class="card full-width">
+<h2 data-i18n="chart_pf_history">Page File History (24h)</h2>
+<div class="chart-container"><canvas id="chart-history"></canvas></div>
+</div>
+
+<!-- Process list -->
+<div class="card full-width">
+<h2><span data-i18n="proc_title">Process Memory TOP 20</span> <span style="font-weight:400;color:#8b949e;font-size:12px" data-i18n="proc_subtitle">— Sorted by Commit</span></h2>
+<input type="text" class="search-box" id="proc-search" data-i18n-placeholder="search_placeholder">
+<div class="scroll-table"><table><thead><tr><th>#</th><th>PID</th><th data-i18n="hdr_name">Name</th><th data-i18n="hdr_commit">Commit</th><th data-i18n="hdr_ws">WS</th></tr></thead><tbody id="process-tbody"></tbody></table></div>
+</div>
+
+<!-- Action log -->
+<div class="card full-width">
+<h2 data-i18n="action_log">Action Log</h2>
+<div class="scroll-table" id="action-log" style="max-height:300px"></div>
+</div>
+
+<!-- Anomalies -->
+<div class="card full-width">
+<h2 data-i18n="anomaly_title">Anomaly Alerts</h2>
+<div id="anomaly-list"><span style="color:#8b949e" data-i18n="msg_no_anomalies">No anomalies detected</span></div>
+</div>
+
+<!-- CPU top -->
+<div class="card full-width">
+<h2 data-i18n="cpu_title">CPU Usage TOP Processes</h2>
+<div class="scroll-table"><table><thead><tr><th>PID</th><th data-i18n="hdr_name">Name</th><th>CPU%</th><th data-i18n="hdr_consecutive">Consecutive</th><th data-i18n="hdr_status">Status</th></tr></thead><tbody id="cpu-tbody"></tbody></table></div>
+</div>
+
+<!-- GPU info -->
+<div class="card full-width">
+<h2 data-i18n="gpu_title">GPU Info</h2>
+<div id="gpu-info"><span style="color:#8b949e" data-i18n="msg_fetching">Fetching...</span></div>
+</div>
+
+<!-- Suspicious processes -->
+<div class="card full-width">
+<h2><span data-i18n="susp_title">Suspicious Processes</span> <span style="font-weight:400;color:#f85149;font-size:12px" data-i18n="susp_subtitle">— Rapid memory growth detector</span></h2>
+<div class="scroll-table"><table><thead><tr><th>PID</th><th data-i18n="hdr_name">Name</th><th data-i18n="hdr_growth">Growth</th><th data-i18n="hdr_peak_rate">Peak Rate</th><th data-i18n="hdr_first_seen">First Seen</th><th data-i18n="hdr_alerts">Alerts</th></tr></thead><tbody id="susp-tbody"></tbody></table></div>
+</div>
+</div>
+
+<div class="footer"><span data-i18n="footer_text">VM Manager v5.1 | CPU/GPU/Memory/Suspicious Detection | DPAPI Encrypted | 127.0.0.1 only</span></div>
+
+<script>
+// ======================================================================
+// I18N Dictionary — All user-facing web strings in 3 languages
+// ======================================================================
+var I18N = {
+  _lang: 'en',
+  _dict: {
+    // ---- App ----
+    app_title:       ['VM Manager v5.1', 'VM Manager v5.1', 'VM Manager v5.1'],
+    app_subtitle:    ['Memory Monitor & Suspicious Process Detector',
+                      '虚拟内存监控与可疑进程检测器',
+                      '虛擬記懶體監控與可疑進程檢測器'],
+    uptime:          ['Uptime:', '运行时间:', '運作時間:'],
+
+    // ---- Cards ----
+    card_memory:     ['Memory Overview', '内存概览', '記懶體概覽'],
+    card_sysinfo:    ['System Info', '系统信息', '系統資訊'],
+    gauge_pf:        ['Page File Usage', '页面文件使用率', '頁面檔案使用率'],
+    gauge_phys:      ['Physical Memory Load', '物理内存负载', '物理記懶體負載'],
+
+    // ---- System info ----
+    sys_total_phys:  ['Total Physical', '物理内存总量', '物理記懶體總量'],
+    sys_avail_phys:  ['Avail Physical', '物理内存可用', '物理記懶體可用'],
+    sys_total_pf:    ['Total Page File', '页面文件总量', '頁面檔案總量'],
+    sys_avail_pf:    ['Avail Page File', '页面文件可用', '頁面檔案可用'],
+    sys_idle:        ['System Idle', '系统空闲时间', '系統空閒時間'],
+    sys_threshold:   ['Trigger Threshold', '触发阈值', '觸發閾值'],
+    sys_threshold_val:['5 min idle + 85% PF', '空闲 5 分钟 + 85% 页面文件', '空閒 5 分鐘 + 85% 頁面檔案'],
+    sys_encrypt:     ['Encryption', '加密', '加密'],
+    sys_encrypt_val: ['DPAPI (user-bound)', 'DPAPI (用户绑定)', 'DPAPI (用戶綁定)'],
+
+    // ---- Charts ----
+    chart_pf_history:['Page File History (24h)', '页面文件历史 (24小时)', '頁面檔案歷史 (24小時)'],
+    chart_legend_pf: ['Page File', '页面文件', '頁面檔案'],
+    chart_legend_ph: ['Physical', '物理内存', '物理記懶體'],
+
+    // ---- Processes ----
+    proc_title:      ['Process Memory TOP 20', '进程内存 TOP 20', '進程記懶體 TOP 20'],
+    proc_subtitle:   ['— Sorted by Commit', '— 按 Commit 排序', '— 按 Commit 排序'],
+    hdr_name:        ['Name', '名称', '名稱'],
+    hdr_commit:      ['Commit', '提交大小', '提交大小'],
+    hdr_ws:          ['WS', '工作集', '工作集'],
+    hdr_growth:      ['Growth', '增长', '增長'],
+    hdr_peak_rate:   ['Peak Rate', '峰值速率', '峰值速率'],
+    hdr_first_seen:  ['First Seen', '最初发现', '最初發現'],
+    hdr_alerts:      ['Alerts', '警报', '警報'],
+    hdr_consecutive: ['Consecutive', '连续次数', '連續次數'],
+    hdr_status:      ['Status', '状态', '狀態'],
+    search_placeholder:['Search process name...', '搜索进程名...', '搜尋進程名...'],
+
+    // ---- Actions ----
+    action_log:      ['Action Log', '操作记录', '操作記錄'],
+    action_none:     ['No actions recorded', '暂无操作记录', '暫無操作記錄'],
+    action_trimmed:  ['Trimmed', '已裁剪', '已裁剪'],
+    action_failed:   ['failed', '失败', '失敗'],
+    action_unchanged:['unchanged', '无变化', '無變化'],
+
+    // ---- Anomalies ----
+    anomaly_title:   ['Anomaly Alerts', '异常警报', '異常警報'],
+    msg_no_anomalies:['No anomalies detected', '未检测到异常', '未檢測到異常'],
+    anom_cpu:        ['CPU', 'CPU', 'CPU'],
+    anom_mem:        ['MEM', '内存', '記懶體'],
+    anom_leak:       ['LEAK', '泄漏', '洩漏'],
+    anom_gpu:        ['GPU', 'GPU', 'GPU'],
+    anom_susp:       ['SUSP', '可疑', '可疑'],
+
+    // ---- CPU ----
+    cpu_title:       ['CPU Usage TOP Processes', 'CPU 占用 TOP 进程', 'CPU 使用 TOP 進程'],
+    cpu_all_normal:  ['All normal (&lt;1% CPU)', '所有进程正常 (&lt;1% CPU)', '所有進程正常 (&lt;1% CPU)'],
+    cpu_anomaly:     ['ANOMALY', '异常', '異常'],
+    cpu_ok:          ['OK', '正常', '正常'],
+
+    // ---- GPU ----
+    gpu_title:       ['GPU Info', 'GPU 信息', 'GPU 資訊'],
+    gpu_unavailable: ['Unavailable (no dGPU or driver)', '不可用 (无独显或驱动)', '不可用 (無獨顯或驅動)'],
+    gpu_name:        ['GPU Name', 'GPU 名称', 'GPU 名稱'],
+    gpu_utilization: ['Utilization', '使用率', '使用率'],
+    gpu_vram:        ['Dedicated VRAM', '专用显存', '專用顯存'],
+    gpu_shared:      ['Shared Memory', '共享内存', '共享記懶體'],
+    msg_fetching:    ['Fetching...', '正在获取...', '正在獲取...'],
+
+    // ---- Suspicious ----
+    susp_title:      ['Suspicious Processes', '可疑进程', '可疑進程'],
+    susp_subtitle:   ['— Rapid memory growth detector', '— 内存快速增长检测', '— 記懶體快速增長檢測'],
+    susp_none:       ['No suspicious processes detected', '未检测到可疑进程', '未檢測到可疑進程'],
+
+    // ---- Misc ----
+    footer_text:     ['VM Manager v5.1 | CPU/GPU/Memory/Suspicious Detection | DPAPI Encrypted | 127.0.0.1 only',
+                      'VM Manager v5.1 | CPU/GPU/内存/可疑检测 | DPAPI 加密 | 仅绑定 127.0.0.1',
+                      'VM Manager v5.1 | CPU/GPU/記懶體/可疑檢測 | DPAPI 加密 | 僅綁定 127.0.0.1'],
+    msg_no_match:    ['No matching processes', '无匹配进程', '無匹配進程'],
+    msg_error_conn:  ['Cannot connect to backend', '无法连接后端服务', '無法連接後端服務']
+  },
+
+  // Get translated string: I18N._('key') or I18N.t('key')
+  t: function(key) {
+    var d = this._dict[key];
+    if (!d) return '[' + key + ']';
+    var idx = this._lang == 'zh-CN' ? 1 : this._lang == 'zh-TW' ? 2 : 0;
+    return d[idx] || d[0];
+  },
+
+  // Detect language from browser
+  detect: function() {
+    var lang = (navigator.language || navigator.userLanguage || 'en').substr(0, 5);
+    if (lang == 'zh-CN' || lang == 'zh-SG' || lang == 'zh-CHS') return 'zh-CN';
+    if (lang == 'zh-TW' || lang == 'zh-HK' || lang == 'zh-MO' || lang == 'zh-CHT') return 'zh-TW';
+    if (lang == 'zh') return 'zh-CN';
+    return 'en';
+  },
+
+  // Apply translations to DOM
+  apply: function() {
+    var self = this;
+    // Translate elements with data-i18n attribute
+    document.querySelectorAll('[data-i18n]').forEach(function(el) {
+      var key = el.getAttribute('data-i18n');
+      el.textContent = self.t(key);
+    });
+    // Translate placeholder attributes
+    document.querySelectorAll('[data-i18n-placeholder]').forEach(function(el) {
+      var key = el.getAttribute('data-i18n-placeholder');
+      el.placeholder = self.t(key);
+    });
+    // Update language buttons
+    document.querySelectorAll('.lang-btn').forEach(function(b) {
+      b.classList.toggle('active', b.id === 'lang-' + self._lang);
+    });
+  },
+
+  setLang: function(lang) {
+    this._lang = lang;
+    this.apply();
+    // Re-render charts/gauges with translated labels
+    fetchStatus(); fetchHistory(); fetchActions();
+    fetchCpu(); fetchGpu(); fetchAnomalies(); fetchSuspicious();
+  }
+};
+
+// Global shortcut
+function _(key) { return I18N.t(key); }
+function setLang(l) { I18N.setLang(l); }
+
+// Initialize language
+I18N._lang = I18N.detect();
+document.addEventListener('DOMContentLoaded', function() { I18N.apply(); });
+
+// ======================================================================
+// Dashboard Logic
+// ======================================================================
+var REFRESH_INTERVAL=5000,countdown=REFRESH_INTERVAL/1000,errorCount=0;
+function fmtMB(b){return b>=1073741824?(b/1073741824).toFixed(2)+' GB':(b/1048576).toFixed(0)+' MB'}
+function fmtSec(s){var h=Math.floor(s/3600),m=Math.floor((s%3600)/60);return h>0?h+'h '+m+'m':m+'m '+s%60+'s'}
+
+function drawGauge(cid,pct,color){
+var c=document.getElementById(cid);if(!c)return;
+var ctx=c.getContext('2d'),w=c.width,h=c.height,cx=w/2,cy=h/2,r=55,lw=10;
+ctx.clearRect(0,0,w,h);
+ctx.beginPath();ctx.arc(cx,cy,r,0.75*Math.PI,2.25*Math.PI);ctx.strokeStyle='#21262d';ctx.lineWidth=lw;ctx.stroke();
+if(pct>0){ctx.beginPath();var sa=0.75*Math.PI,sw=pct/100*1.5*Math.PI;ctx.arc(cx,cy,r,sa,sa+sw);ctx.strokeStyle=color;ctx.lineWidth=lw;ctx.lineCap='round';ctx.stroke();}
+ctx.fillStyle='#e6edf3';ctx.font='bold 22px Segoe UI';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(pct+'%',cx,cy-2);
+}
+
+function drawHistory(data){
+var c=document.getElementById('chart-history');if(!c||!data||!data.points||data.points.length<2)return;
+var p=c.parentElement;c.width=p.clientWidth-4;c.height=p.clientHeight-4;
+var ctx=c.getContext('2d'),w=c.width,h=c.height;
+ctx.clearRect(0,0,w,h);
+var pad={top:20,right:40,bottom:30,left:50},pw=w-pad.left-pad.right,ph=h-pad.top-pad.bottom;
+var pts=data.points;
+function px(i){return pad.left+(pw*(i/(pts.length-1)))}
+function py(v){return pad.top+ph-(ph*(v/100))}
+ctx.fillStyle='#8b949e';ctx.font='11px Segoe UI';
+for(var v=0;v<=100;v+=20){var y=py(v);ctx.fillText(v+'%',4,y+4);ctx.beginPath();ctx.moveTo(pad.left,y);ctx.lineTo(pad.left+pw,y);ctx.strokeStyle='#21262d';ctx.stroke();}
+for(var i=0;i<pts.length;i+=Math.max(1,Math.floor(pts.length/6))){var d=new Date(pts[i].t*1000);ctx.fillText(d.getHours().toString().padStart(2,'0')+':'+d.getMinutes().toString().padStart(2,'0'),px(i)-15,h-4);}
+ctx.beginPath();for(var i=0;i<pts.length;i++){var x=px(i),y=py(pts[i].pf);i==0?ctx.moveTo(x,y):ctx.lineTo(x,y);}ctx.strokeStyle='#58a6ff';ctx.lineWidth=2;ctx.stroke();
+ctx.beginPath();for(var i=0;i<pts.length;i++){var x=px(i),y=py(pts[i].ph);i==0?ctx.moveTo(x,y):ctx.lineTo(x,y);}ctx.strokeStyle='#3fb950';ctx.lineWidth=2;ctx.setLineDash([4,4]);ctx.stroke();ctx.setLineDash([]);
+ctx.fillStyle='#58a6ff';ctx.fillRect(pad.left+10,8,12,12);ctx.fillStyle='#3fb950';ctx.fillRect(pad.left+80,8,12,12);ctx.fillStyle='#e6edf3';ctx.textAlign='left';ctx.fillText(_('chart_legend_pf'),pad.left+26,18);ctx.fillText(_('chart_legend_ph'),pad.left+96,18);
+}
+
+function updProcesses(procs){
+var tb=document.getElementById('process-tbody'),s=document.getElementById('proc-search').value.toLowerCase();
+tb.innerHTML='';var n=0;
+for(var i=0;i<procs.length;i++){var p=procs[i];if(s&&p.name.toLowerCase().indexOf(s)<0)continue;
+var cls=p.commit_mb>2048?'danger':p.commit_mb>512?'warning':'';
+tb.innerHTML+='<tr><td>'+(n+1)+'</td><td>'+p.pid+'</td><td class="process-name" title="'+p.name+'">'+p.name+'</td><td class="'+cls+'">'+(p.commit_mb>1024?(p.commit_mb/1024).toFixed(2)+' GB':p.commit_mb+' MB')+'</td><td>'+(p.ws_mb>1024?(p.ws_mb/1024).toFixed(2)+' GB':p.ws_mb+' MB')+'</td></tr>';n++;}
+if(!n)tb.innerHTML='<tr><td colspan="5" style="text-align:center;color:#8b949e">'+_('msg_no_match')+'</td></tr>';
+}
+
+function updActions(acts){
+var d=document.getElementById('action-log');
+if(!acts||!acts.length){d.innerHTML='<div class="log-entry"><span class="log-msg" style="color:#8b949e">'+_('action_none')+'</span></div>';return}
+d.innerHTML='';
+for(var i=0;i<acts.length;i++){var a=acts[i],dt=new Date(a.t*1000),ts=dt.getHours().toString().padStart(2,'0')+':'+dt.getMinutes().toString().padStart(2,'0')+':'+dt.getSeconds().toString().padStart(2,'0');
+var delta=a.bf-a.af,ds=delta>0?'<span class="success">-'+delta+'%</span>':(delta<0?'<span class="warning">+'+Math.abs(delta)+'%</span>':_('action_unchanged'));
+d.innerHTML+='<div class="log-entry"><span class="log-time">'+ts+'</span><span class="log-msg">'+_('action_trimmed')+' <b>'+a.tc+'</b> procs, '+a.fc+' '+_('action_failed')+' | PF: '+a.bf+'% &rarr; '+a.af+'% '+ds+'</span></div>';}
+}
+
+function updStatus(s){
+document.getElementById('uptime').parentElement.childNodes[0].textContent = _('uptime') + ' ';
+document.getElementById('uptime').textContent=fmtSec(s.running_seconds);
+document.getElementById('sys-total-phys').textContent=fmtMB(s.total_phys_mb*1048576);
+document.getElementById('sys-avail-phys').textContent=fmtMB(s.avail_phys_mb*1048576);
+document.getElementById('sys-total-pf').textContent=fmtMB(s.total_pagefile_mb*1048576);
+document.getElementById('sys-avail-pf').textContent=fmtMB(s.avail_pagefile_mb*1048576);
+document.getElementById('sys-idle').textContent=fmtSec(s.idle_seconds);
+var pfc=s.page_file_pct>85?'#f85149':s.page_file_pct>60?'#d29922':'#3fb950';
+var phc=s.phys_load>90?'#f85149':s.phys_load>70?'#d29922':'#3fb950';
+drawGauge('gauge-pf',s.page_file_pct,pfc);drawGauge('gauge-phys',s.phys_load,phc);
+document.getElementById('gauge-pf-pct').textContent=s.page_file_pct+'%';document.getElementById('gauge-pf-pct').style.color=pfc;
+document.getElementById('gauge-phys-pct').textContent=s.phys_load+'%';document.getElementById('gauge-phys-pct').style.color=phc;
+updProcesses(s.processes||[]);
+document.getElementById('status-dot').style.background=s.page_file_pct>=s.threshold_pct?'#d29922':'#3fb950';
+errorCount=0;
+}
+
+function fetchStatus(){fetch('/api/status').then(function(r){if(!r.ok)throw Error('HTTP '+r.status);return r.json()}).then(updStatus).catch(function(e){errorCount++;if(errorCount>=3){document.getElementById('error-banner').style.display='block';document.getElementById('error-banner').textContent=_('msg_error_conn')+' ('+e.message+')';}})}
+function fetchHistory(){fetch('/api/history').then(function(r){return r.json()}).then(drawHistory).catch(function(){})}
+function fetchActions(){fetch('/api/actions').then(function(r){return r.json()}).then(function(d){updActions(d.actions||[])}).catch(function(){})}
+function fetchCpu(){fetch('/api/cpu').then(function(r){return r.json()}).then(function(d){updCpu(d.processes||[])}).catch(function(){})}
+function fetchGpu(){fetch('/api/gpu').then(function(r){return r.json()}).then(updGpu).catch(function(){})}
+function fetchAnomalies(){fetch('/api/anomalies').then(function(r){return r.json()}).then(function(d){updAnomalies(d.alerts||[])}).catch(function(){})}
+function fetchSuspicious(){fetch('/api/suspicious').then(function(r){return r.json()}).then(function(d){updSuspicious(d.processes||[])}).catch(function(){})}
+
+function updCpu(procs){
+var tb=document.getElementById('cpu-tbody');
+if(!procs.length){tb.innerHTML='<tr><td colspan="5" style="text-align:center;color:#8b949e">'+_('cpu_all_normal')+'</td></tr>';return}
+tb.innerHTML='';for(var i=0;i<procs.length;i++){var p=procs[i],cls=p.cpu_pct>50?'danger':p.cpu_pct>25?'warning':'success',st=p.consecutive>=3?'<span class="badge badge-danger">'+_('cpu_anomaly')+'</span>':'<span class="badge badge-ok">'+_('cpu_ok')+'</span>';tb.innerHTML+='<tr><td>'+p.pid+'</td><td class="process-name" title="'+p.name+'">'+p.name+'</td><td class="'+cls+'">'+p.cpu_pct.toFixed(1)+'%</td><td>'+p.consecutive+'</td><td>'+st+'</td></tr>';}
+}
+
+function updGpu(gpu){
+var d=document.getElementById('gpu-info');
+if(!gpu||!gpu.available){d.innerHTML='<div class="metric-row"><span class="label">GPU</span><span class="value" style="color:#8b949e">'+_('gpu_unavailable')+'</span></div>';return}
+var uc=gpu.utilization>90?'danger':gpu.utilization>60?'warning':'success';
+d.innerHTML='<div class="metric-row"><span class="label">'+_('gpu_name')+'</span><span class="value">'+gpu.name+'</span></div><div class="metric-row"><span class="label">'+_('gpu_utilization')+'</span><span class="value '+uc+'">'+gpu.utilization+'%</span></div><div class="metric-row"><span class="label">'+_('gpu_vram')+'</span><span class="value">'+gpu.vram_used_mb+' / '+gpu.vram_total_mb+' MB</span></div><div class="metric-row"><span class="label">'+_('gpu_shared')+'</span><span class="value">'+gpu.shared_used_mb+' / '+gpu.shared_total_mb+' MB</span></div>';
+}
+
+function updAnomalies(alerts){
+var d=document.getElementById('anomaly-list');
+if(!alerts.length){d.innerHTML='<span style="color:#3fb950">'+_('msg_no_anomalies')+'</span>';return}
+d.innerHTML='';var icons={cpu_hog:_('anom_cpu'),mem_hog:_('anom_mem'),mem_leak:_('anom_leak'),gpu_hog:_('anom_gpu'),suspicious:_('anom_susp')},colors={cpu_hog:'#f85149',mem_hog:'#d29922',mem_leak:'#f85149',gpu_hog:'#d29922',suspicious:'#f85149'};
+for(var i=0;i<alerts.length;i++){var a=alerts[i],dt=new Date(a.t*1000),ts=dt.getHours().toString().padStart(2,'0')+':'+dt.getMinutes().toString().padStart(2,'0');
+d.innerHTML+='<div style="padding:6px 0;border-bottom:1px solid #21262d;font-size:13px"><span class="badge" style="background:'+colors[a.type]+'33;color:'+colors[a.type]+';border:1px solid '+colors[a.type]+'">'+(icons[a.type]||a.type)+'</span> <span style="color:#8b949e">'+ts+'</span> '+a.desc+'</div>';}
+}
+
+function updSuspicious(procs){
+var tb=document.getElementById('susp-tbody');
+if(!procs.length){tb.innerHTML='<tr><td colspan="6" style="text-align:center;color:#3fb950">'+_('susp_none')+'</td></tr>';return}
+tb.innerHTML='';for(var i=0;i<procs.length;i++){var p=procs[i],g=p.growth_mb>0?'<span class="danger">+'+p.growth_mb+' MB</span>':_('action_unchanged'),ft=new Date(p.first_seen*1000).toLocaleString();tb.innerHTML+='<tr><td>'+p.pid+'</td><td class="process-name" title="'+p.name+'">'+p.name+'</td><td>'+g+'</td><td class="warning">'+p.peak_rate.toFixed(1)+' MB/s</td><td>'+ft+'</td><td><span class="badge badge-danger">'+p.alerts+'</span></td></tr>';}
+}
+
+document.getElementById('proc-search').addEventListener('input',function(){if(window.__lastStatus)updProcesses(window.__lastStatus.processes||[])});
+setInterval(function(){countdown--;if(countdown<=0)countdown=REFRESH_INTERVAL/1000},1000);
+I18N.apply();
+fetchStatus();fetchHistory();fetchActions();fetchCpu();fetchGpu();fetchAnomalies();fetchSuspicious();
+setInterval(fetchStatus,REFRESH_INTERVAL);setInterval(fetchHistory,60000);setInterval(fetchActions,30000);
+setInterval(fetchCpu,REFRESH_INTERVAL);setInterval(fetchGpu,30000);setInterval(fetchAnomalies,30000);setInterval(fetchSuspicious,30000);
+</script>
+</body>
+</html>
