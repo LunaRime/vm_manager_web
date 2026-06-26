@@ -423,8 +423,10 @@ std::string VMI18n::Utf8ToAnsi(const char *utf8) const
     int aLen = WideCharToMultiByte(CP_ACP, 0, wbuf, -1, nullptr, 0, nullptr, nullptr);
     std::string result;
     if (aLen > 0) {
-        result.resize(aLen - 1);  /* exclude null terminator */
+        result.resize(aLen);  /* aLen includes null, resize to full size */
         WideCharToMultiByte(CP_ACP, 0, wbuf, -1, &result[0], aLen, nullptr, nullptr);
+        if (!result.empty() && result.back() == '\0')
+            result.pop_back();  /* remove null terminator */
     }
 
     HeapFree(GetProcessHeap(), 0, wbuf);

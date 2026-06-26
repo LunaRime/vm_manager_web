@@ -74,6 +74,15 @@ bool VMApp::InitCore()
 {
     m_startTime = time(nullptr);
 
+    /* 0. DPI awareness — prevent blurry scaling on high-DPI displays */
+    {
+        HMODULE hUser32 = GetModuleHandleA("user32.dll");
+        typedef BOOL (WINAPI *PFN_SetProcessDPIAware)(void);
+        PFN_SetProcessDPIAware pfn = (PFN_SetProcessDPIAware)
+            GetProcAddress(hUser32, "SetProcessDPIAware");
+        if (pfn) pfn();
+    }
+
     /* 1. Locale detection (before any UI or log output) */
     LocaleInit();
 

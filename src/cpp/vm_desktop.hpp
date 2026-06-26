@@ -97,10 +97,10 @@ private:
     void DrawLineChart(HDC hdc, RECT rc);
     void DrawBarChart(HDC hdc, RECT rc);
 
-    /* ---- ListView helpers ---- */
-    HWND CreateListView(int x, int y, int w, int h,
-                        const char **headers, int *widths, int nCols, int id);
-    void AddLVItem(HWND lv, int row, int col, const char *text);
+    /* ---- ListView helpers (Unicode) ---- */
+    HWND CreateLV(int x, int y, int w, int h,
+                  const char **headers, int *widths, int nCols, int id);
+    void AddLV(HWND lv, int row, int col, const WCHAR *text);
     void ClearLV(HWND lv);
 
     /* ---- System tray ---- */
