@@ -127,6 +127,7 @@ private:
     HWND m_hTab;
     HWND m_hBtnCleanup;
     HWND m_hBtnExport;
+    HWND m_hBtnServer;
     HWND m_hBtnExit;
 
     /* Tab pages */
@@ -186,6 +187,7 @@ private:
         ID_BTN_CLEANUP= 2002,
         ID_BTN_EXPORT = 2003,
         ID_BTN_EXIT   = 2004,
+        ID_BTN_SERVER = 2005,
         ID_LIST_PROC  = 2101,
         ID_LIST_ANOM  = 2102,
         ID_LIST_SUSP  = 2103,

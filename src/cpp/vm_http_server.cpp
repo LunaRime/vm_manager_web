@@ -13,6 +13,7 @@
  *   GET /api/aggregated?range=week → aggregated history JSON
  */
 #include "vm_http_server.hpp"
+#include "vm_app.hpp"
 
 #include <cstdio>
 #include <cstring>
@@ -246,6 +247,21 @@ void VMHttpServer::RouteRequest(SOCKET client,
         SendResponse(client, 200, "application/json", BuildSuspiciousJson());
         return;
     }
+    /* ---- Server / App control ---- */
+    if (path == "/api/stopserver") {
+        VMApp *app = GetVMApp();
+        if (app) app->StopHttpServer();
+        SendResponse(client, 200, "application/json", "{\"ok\":true,\"msg\":\"Server stopped\"}");
+        return;
+    }
+    if (path == "/api/shutdown") {
+        SendResponse(client, 200, "application/json", "{\"ok\":true,\"msg\":\"Shutting down...\"}");
+        /* Signal shutdown after response */
+        VMApp *app = GetVMApp();
+        if (app) app->RequestShutdown();
+        return;
+    }
+
     if (path.compare(0, 16, "/api/aggregated") == 0) {
         int range = CHART_WEEK;
         size_t qpos = path.find("range=");

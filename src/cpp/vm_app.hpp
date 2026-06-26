@@ -51,13 +51,15 @@ public:
     /* ---- Accessors ---- */
     int    GetHttpPort()  const { return m_httpPort; }
     time_t GetStartTime() const { return m_startTime; }
+    bool   IsHttpRunning() const;
 
-private:
+    /* ---- HTTP server control ---- */
+    bool StartHttpServer();
+    void StopHttpServer();
     enum class Mode { Console, Headless, Desktop };
 
     bool ParseCommandLine(LPSTR lpCmdLine);
     bool InitCore();
-    bool StartHttpServer();
 
     int RunConsole();
     int RunHeadless();
@@ -78,5 +80,8 @@ private:
     int     m_httpPort;
     time_t  m_startTime;
 };
+
+/* Global singleton accessor for cross-module HTTP control */
+VMApp *GetVMApp();
 
 #endif /* VM_APP_HPP */

@@ -5,6 +5,7 @@
  * WM_CLOSE → destroy.  SC_MINIMIZE → hide to tray.
  */
 #include "vm_desktop.hpp"
+#include "vm_app.hpp"
 #include <commdlg.h>
 
 #define CLEARTYPE_QUALITY 5
@@ -33,7 +34,8 @@ const WCHAR* VMDesktopApp::kOverviewClass=L"VMOvV52W";
 // ============================================================================
 VMDesktopApp::VMDesktopApp():m_hInst(nullptr),m_hWnd(nullptr),m_hFont(nullptr),
     m_hTitleFont(nullptr),m_hMonoFont(nullptr),m_hTab(nullptr),m_hBtnCleanup(nullptr),
-    m_hBtnExport(nullptr),m_hBtnExit(nullptr),m_hOverviewPane(nullptr),m_hProcList(nullptr),
+    m_hBtnExport(nullptr),m_hBtnServer(nullptr),m_hBtnExit(nullptr),
+    m_hOverviewPane(nullptr),m_hProcList(nullptr),
     m_hDbPanel(nullptr),m_hChartArea(nullptr),m_hAnomList(nullptr),m_hSuspList(nullptr),
     m_hActionLog(nullptr),m_hCboRange(nullptr),m_hLblRange(nullptr),m_hBtnChartMode(nullptr),
     m_hStatus(nullptr),m_activeTab(TAB_OV),m_chartRange(CHART_WEEK),m_chartMode(0),m_running(false){}
@@ -94,6 +96,8 @@ void VMDesktopApp::CreateChildControls(){VMI18n& i18n=VMI18n::Instance();
         SendMessageW(h,WM_SETFONT,(WPARAM)m_hFont,TRUE);return h;};
     m_hBtnExport=btn(cw-460,i18n::BTN_EXPORT,ID_BTN_EXPORT);
     m_hBtnCleanup=btn(cw-340,i18n::BTN_CLEANUP,ID_BTN_CLEANUP);
+    m_hBtnServer=btn(cw-230,i18n::BTN_CLEANUP,ID_BTN_SERVER);  /* reuse label, reset below */
+    SetWindowTextW(m_hBtnServer, L"Web: ON");
     m_hBtnExit=btn(cw-120,i18n::BTN_EXIT,ID_BTN_EXIT);
 
     /* Chart controls */
@@ -168,6 +172,7 @@ void VMDesktopApp::LayoutChildren(int cw,int ch){int ct=44,cl=8,cr=cw-16;
     if(m_hTab)SetWindowPos(m_hTab,nullptr,8,6,cw-16,28,SWP_NOZORDER);
     if(m_hBtnExport)SetWindowPos(m_hBtnExport,nullptr,cw-460,8,110,26,SWP_NOZORDER);
     if(m_hBtnCleanup)SetWindowPos(m_hBtnCleanup,nullptr,cw-340,8,110,26,SWP_NOZORDER);
+    if(m_hBtnServer)SetWindowPos(m_hBtnServer,nullptr,cw-230,8,100,26,SWP_NOZORDER);
     if(m_hBtnExit)SetWindowPos(m_hBtnExit,nullptr,cw-120,8,100,26,SWP_NOZORDER);
     if(m_hOverviewPane)SetWindowPos(m_hOverviewPane,nullptr,cl,ct,cr,90,SWP_NOZORDER);
     if(m_hProcList)SetWindowPos(m_hProcList,nullptr,cl,ct+98,cr,ch-ct-148,SWP_NOZORDER);
@@ -475,7 +480,12 @@ void VMDesktopApp::OnCreate(HWND){InitCommonControls();CreateChildControls();Ref
 void VMDesktopApp::OnSize(int w,int h){LayoutChildren(w,h);RefreshStatusBar();}
 void VMDesktopApp::OnCommand(WORD id,WORD code,HWND){
     switch(id){case ID_BTN_CLEANUP:CheckAndAct();RefreshAll();break;
-        case ID_BTN_EXPORT:ExportDatabaseCSV();break;case ID_BTN_EXIT:DestroyWindow(m_hWnd);break;
+        case ID_BTN_EXPORT:ExportDatabaseCSV();break;
+        case ID_BTN_SERVER:{VMApp*a=GetVMApp();
+            if(a&&a->IsHttpRunning()){a->StopHttpServer();SetWindowTextW(m_hBtnServer,L"Web: OFF");}
+            else if(a){a->StartHttpServer();SetWindowTextW(m_hBtnServer,L"Web: ON");}
+            RefreshStatusBar();}break;
+        case ID_BTN_EXIT:DestroyWindow(m_hWnd);break;
         case IDM_SHOW:ShowWindow(m_hWnd,SW_RESTORE);SetForegroundWindow(m_hWnd);break;
         case IDM_CLEANUP:CheckAndAct();RefreshAll();break;
         case IDM_EXPORT:ExportDatabaseCSV();break;case IDM_EXIT:DestroyWindow(m_hWnd);break;

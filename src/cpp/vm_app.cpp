@@ -15,6 +15,10 @@ extern "C" {
 #include "../web/dashboard_html.h"
 }
 
+/* Global pointer for desktop/server cross-access */
+static VMApp *g_pApp = nullptr;
+VMApp *GetVMApp() { return g_pApp; }
+
 // ============================================================================
 // Construction / Destruction
 // ============================================================================
@@ -42,6 +46,7 @@ bool VMApp::Initialize(HINSTANCE hInstance, LPSTR lpCmdLine)
 {
     m_hInstance = hInstance;
     if (lpCmdLine) m_cmdLine = lpCmdLine;
+    g_pApp = this;  /* global access for desktop/server cross-control */
 
     ParseCommandLine(lpCmdLine);
 
@@ -133,6 +138,10 @@ bool VMApp::InitCore()
 
 bool VMApp::StartHttpServer()
 {
+    if (m_httpServer.GetPort() != 0) {
+        Log("HTTP server already running on port %d", m_httpServer.GetPort());
+        return true;
+    }
     if (!m_httpServer.Start(HTTP_PORT_START, HTTP_PORT_END)) {
         Log("Error: unable to start HTTP server");
         return false;
@@ -146,6 +155,22 @@ bool VMApp::StartHttpServer()
     g_hHttpThread = m_httpServer.GetThreadHandle();
 
     return true;
+}
+
+void VMApp::StopHttpServer()
+{
+    if (m_httpServer.GetPort() == 0) return;
+    Log("Stopping HTTP server...");
+    m_httpServer.Stop();
+    m_httpPort = 0;
+    g_httpPort = 0;
+    g_hHttpThread = nullptr;
+    Log("HTTP server stopped");
+}
+
+bool VMApp::IsHttpRunning() const
+{
+    return m_httpServer.GetPort() != 0;
 }
 
 // ============================================================================

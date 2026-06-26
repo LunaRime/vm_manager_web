@@ -502,11 +502,31 @@ std::string VMI18n::Format(const char *key, ...) const
 
 const WCHAR *VMI18n::GetW(const char *key) const
 {
-    /* Ring buffer for wide strings (caller must copy immediately) */
+    /* Ring buffer for wide strings (caller must copy immediately).
+       CRITICAL: Look up the RAW UTF-8 value directly from the Entry table.
+       Do NOT go through Get() which converts UTF-8 → ANSI (GBK).
+       That would cause double-encoding mojibake when Utf8ToWide
+       treats GBK bytes as UTF-8. */
     static WCHAR buf[4][1024];
     static int next = 0;
 
-    std::wstring ws = Utf8ToWide(Get(key).c_str());
+    /* Try our C++ string table first (raw UTF-8 values) */
+    const Entry *e = FindEntry(key);
+    const char *rawUtf8 = nullptr;
+    if (e) {
+        int idx = (int)GetLocale();
+        if (idx < 0 || idx > 2) idx = 0;
+        rawUtf8 = e->values[idx];
+    }
+    /* Fallback: try C locale layer (L10N returns UTF-8 already converted
+       to system ANSI — but L10NW exists for wide strings, try that path) */
+    if (!rawUtf8 || !rawUtf8[0]) {
+        /* L10NW directly returns WCHAR* from the C layer */
+        return L10NW(key);
+    }
+
+    /* Convert raw UTF-8 → UTF-16 (single clean conversion) */
+    std::wstring ws = Utf8ToWide(rawUtf8);
     WCHAR *out = buf[next];
     next = (next + 1) % 4;
 
@@ -519,30 +539,58 @@ const WCHAR *VMI18n::GetW(const char *key) const
 
 const WCHAR *VMI18n::FormatW(const char *key, ...) const
 {
+    /* Same approach: get raw UTF-8 format string, format it as UTF-8,
+       then convert UTF-8 → UTF-16 once. */
+    const Entry *e = FindEntry(key);
+    const char *rawUtf8 = nullptr;
+    if (e) {
+        int idx = (int)GetLocale();
+        if (idx < 0 || idx > 2) idx = 0;
+        rawUtf8 = e->values[idx];
+    }
+    if (!rawUtf8 || !rawUtf8[0]) {
+        /* Fallback: format via ANSI path (not ideal but functional) */
+        va_list args;
+        va_start(args, key);
+        std::string tmpl = Get(key);
+        va_list argsCopy;
+        va_copy(argsCopy, args);
+        int needed = vsnprintf(nullptr, 0, tmpl.c_str(), argsCopy);
+        va_end(argsCopy);
+        std::string result;
+        if (needed > 0) { result.resize(needed+1); vsnprintf(&result[0],result.size(),tmpl.c_str(),args); result.resize(needed); }
+        else result = tmpl;
+        va_end(args);
+        static WCHAR buf[4][1024]; static int next = 0;
+        std::wstring ws = Utf8ToWide(result.c_str());
+        WCHAR *out = buf[next]; next = (next+1)%4;
+        int len = (int)ws.size(); if(len>1023)len=1023;
+        memcpy(out, ws.c_str(), len*sizeof(WCHAR)); out[len]=L'\0';
+        return out;
+    }
+
+    /* Format raw UTF-8 template with variadic args (all %s/%d args are ASCII-safe) */
     va_list args;
     va_start(args, key);
-
-    std::string formatted = Get(key);
-
     va_list argsCopy;
     va_copy(argsCopy, args);
-    int needed = vsnprintf(nullptr, 0, formatted.c_str(), argsCopy);
+    int needed = vsnprintf(nullptr, 0, rawUtf8, argsCopy);
     va_end(argsCopy);
 
-    std::string result;
+    std::string formatted;
     if (needed > 0) {
-        result.resize(needed + 1);
-        vsnprintf(&result[0], result.size(), formatted.c_str(), args);
-        result.resize(needed);
+        formatted.resize(needed + 1);
+        vsnprintf(&formatted[0], formatted.size(), rawUtf8, args);
+        formatted.resize(needed);
     } else {
-        result = formatted;
+        formatted = rawUtf8;
     }
     va_end(args);
 
+    /* Single clean conversion: UTF-8 → UTF-16 */
     static WCHAR buf[4][1024];
     static int next = 0;
-
-    std::wstring ws = Utf8ToWide(result.c_str());
+    std::wstring ws = Utf8ToWide(formatted.c_str());
     WCHAR *out = buf[next];
     next = (next + 1) % 4;
 
