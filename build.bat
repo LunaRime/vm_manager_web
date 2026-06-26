@@ -14,6 +14,7 @@ REM ============================================================
 
 set "GCC=..\MinGW\bin\gcc.exe"
 set "GPP=..\MinGW\bin\g++.exe"
+set "WINDRES=..\MinGW\bin\windres.exe"
 
 set "BUILD_DIR=build"
 set "OUT=vm_manager.exe"
@@ -48,7 +49,7 @@ echo.
 REM ---- Create build directory ----
 if not exist "%BUILD_DIR%" mkdir "%BUILD_DIR%"
 
-echo [1/4] Compiling C core layer...
+echo [1/5] Compiling C core layer...
 "%GCC%" -c %INCLUDES% src/core/vm_engine.c -o %BUILD_DIR%/vm_engine.o %CFLAGS%
 if !errorlevel! neq 0 goto :fail
 "%GCC%" -c %INCLUDES% src/core/vm_db.c    -o %BUILD_DIR%/vm_db.o    %CFLAGS%
@@ -57,7 +58,7 @@ if !errorlevel! neq 0 goto :fail
 if !errorlevel! neq 0 goto :fail
 echo   [OK] 3 C modules compiled
 
-echo [2/4] Compiling C++ wrapper layer...
+echo [2/5] Compiling C++ wrapper layer...
 "%GPP%" -c %INCLUDES% %CPPFLAGS% src/cpp/vm_i18n.cpp         -o %BUILD_DIR%/vm_i18n.o
 if !errorlevel! neq 0 goto :fail
 "%GPP%" -c %INCLUDES% %CPPFLAGS% src/cpp/vm_app.cpp          -o %BUILD_DIR%/vm_app.o
@@ -68,16 +69,21 @@ if !errorlevel! neq 0 goto :fail
 if !errorlevel! neq 0 goto :fail
 echo   [OK] 4 C++ modules compiled
 
-echo [3/4] Compiling entry point...
+echo [3/5] Compiling entry point...
 "%GPP%" -c %INCLUDES% %CPPFLAGS% src/main.cpp -o %BUILD_DIR%/main.o
 if !errorlevel! neq 0 goto :fail
 echo   [OK] main.cpp compiled
 
-echo [4/4] Linking...
+echo [4/5] Compiling icon resource...
+"%WINDRES%" src/vm_manager.rc -O coff -o %BUILD_DIR%/vm_manager.res
+if !errorlevel! neq 0 goto :fail
+echo   [OK] vm_manager.res
+
+echo [5/5] Linking...
 "%GPP%" %BUILD_DIR%/vm_engine.o %BUILD_DIR%/vm_db.o %BUILD_DIR%/vm_locale.o ^
         %BUILD_DIR%/vm_i18n.o %BUILD_DIR%/vm_app.o ^
         %BUILD_DIR%/vm_http_server.o %BUILD_DIR%/vm_desktop.o ^
-        %BUILD_DIR%/main.o ^
+        %BUILD_DIR%/main.o %BUILD_DIR%/vm_manager.res ^
         -o %OUT% -mwindows %LIBS% -O2 -s
 if !errorlevel! neq 0 goto :fail
 
