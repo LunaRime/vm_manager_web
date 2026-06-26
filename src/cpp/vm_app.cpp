@@ -54,12 +54,16 @@ bool VMApp::Initialize(HINSTANCE hInstance, LPSTR lpCmdLine)
 
 bool VMApp::ParseCommandLine(LPSTR lpCmdLine)
 {
-    m_mode = Mode::Headless;  /* default: silent background */
+    /* Default: Desktop GUI (user expectation when double-clicking .exe).
+       Use /headless or /silent for background mode. */
+    m_mode = Mode::Desktop;
 
     if (!lpCmdLine || lpCmdLine[0] == '\0') return true;
 
     if (strstr(lpCmdLine, "/console") || strstr(lpCmdLine, "/c"))
         m_mode = Mode::Console;
+    else if (strstr(lpCmdLine, "/headless") || strstr(lpCmdLine, "/silent") || strstr(lpCmdLine, "/h"))
+        m_mode = Mode::Headless;
     else if (strstr(lpCmdLine, "/desktop") || strstr(lpCmdLine, "/gui"))
         m_mode = Mode::Desktop;
 

@@ -44,6 +44,7 @@ int            g_suspProcCount = 0;
 
 PFN_PdhOpenQueryA                g_pfnPdhOpenQueryA = NULL;
 PFN_PdhAddCounterA               g_pfnPdhAddCounterA = NULL;
+PFN_PdhAddEnglishCounterA        g_pfnPdhAddEnglishCounterA = NULL;
 PFN_PdhCollectQueryData          g_pfnPdhCollectQueryData = NULL;
 PFN_PdhGetFormattedCounterArrayA  g_pfnPdhGetFormattedCounterArrayA = NULL;
 PFN_PdhCloseQuery                g_pfnPdhCloseQuery = NULL;
@@ -521,6 +522,9 @@ static BOOL LoadPdhLibrary(void) {
     if (!g_hPdhDll) return FALSE;
     g_pfnPdhOpenQueryA    = (PFN_PdhOpenQueryA)    GetProcAddress(g_hPdhDll, "PdhOpenQueryA");
     g_pfnPdhAddCounterA   = (PFN_PdhAddCounterA)   GetProcAddress(g_hPdhDll, "PdhAddCounterA");
+    /* PdhAddEnglishCounterA available on Vista+ — use English counter names
+       regardless of system locale (critical for zh-CN/zh-TW Windows) */
+    g_pfnPdhAddEnglishCounterA = (PFN_PdhAddEnglishCounterA) GetProcAddress(g_hPdhDll, "PdhAddEnglishCounterA");
     g_pfnPdhCollectQueryData         = (PFN_PdhCollectQueryData)         GetProcAddress(g_hPdhDll, "PdhCollectQueryData");
     g_pfnPdhGetFormattedCounterArrayA = (PFN_PdhGetFormattedCounterArrayA)GetProcAddress(g_hPdhDll, "PdhGetFormattedCounterArrayA");
     g_pfnPdhCloseQuery               = (PFN_PdhCloseQuery)               GetProcAddress(g_hPdhDll, "PdhCloseQuery");
@@ -530,45 +534,145 @@ static BOOL LoadPdhLibrary(void) {
 void InitGpuMonitoring(void) {
     memset(&g_gpuInfo, 0, sizeof(g_gpuInfo));
     g_gpuInfo.utilization = -1;
-    if (!LoadPdhLibrary()) return;
 
-    PDH_STATUS status = g_pfnPdhOpenQueryA(NULL, 0, &g_hPdhQuery);
-    if (status != ERROR_SUCCESS) return;
-
-    status = g_pfnPdhAddCounterA(g_hPdhQuery,
-        "\\GPU Engine(*engtype_3d)\\Utilization Percentage", 0, &g_hPdhCounterGpu);
-    if (status != ERROR_SUCCESS) {
-        status = g_pfnPdhAddCounterA(g_hPdhQuery,
-            "\\GPU Engine(*)\\Utilization Percentage", 0, &g_hPdhCounterGpu);
+    if (!LoadPdhLibrary()) {
+        Log("GPU: pdh.dll not available");
+        return;
     }
+
+    /* ---- Open PDH query ---- */
+    PDH_STATUS status = g_pfnPdhOpenQueryA(NULL, 0, &g_hPdhQuery);
+    if (status != ERROR_SUCCESS) {
+        Log("GPU: PdhOpenQueryA failed (0x%08lX)", (unsigned long)status);
+        return;
+    }
+
+    /* ---- Add GPU utilization counter ----
+       Try multiple paths because different GPU drivers expose
+       different counter names.  PdhAddEnglishCounterA uses the
+       locale-independent English name (critical on Chinese Windows). */
+    static const char *gpuCounterPaths[] = {
+        "\\GPU Engine(*engtype_3d)\\Utilization Percentage",
+        "\\GPU Engine(*engtype_3D)\\Utilization Percentage",
+        "\\GPU Engine(*)\\Utilization Percentage",
+        "\\GPU Adapter(*)\\Utilization Percentage",
+    };
+
+    BOOL counterAdded = FALSE;
+    int ci;
+    for (ci = 0; ci < 4; ci++) {
+        /* Try English counter first (works on all locales) */
+        if (g_pfnPdhAddEnglishCounterA) {
+            status = g_pfnPdhAddEnglishCounterA(g_hPdhQuery,
+                gpuCounterPaths[ci], 0, &g_hPdhCounterGpu);
+            if (status == ERROR_SUCCESS) { counterAdded = TRUE; break; }
+        }
+        /* Fallback to localized counter */
+        status = g_pfnPdhAddCounterA(g_hPdhQuery,
+            gpuCounterPaths[ci], 0, &g_hPdhCounterGpu);
+        if (status == ERROR_SUCCESS) { counterAdded = TRUE; break; }
+    }
+
+    if (!counterAdded) {
+        Log("GPU: no utilization counter available (0x%08lX)", (unsigned long)status);
+        g_pfnPdhCloseQuery(g_hPdhQuery);
+        g_hPdhQuery = NULL;
+        return;
+    }
+
+    /* Prime the first data collection */
+    status = g_pfnPdhCollectQueryData(g_hPdhQuery);
     if (status == ERROR_SUCCESS) {
         g_bPdhAvailable = TRUE;
-        g_pfnPdhCollectQueryData(g_hPdhQuery);
+        Log("GPU: PDH counter initialized, path=%s", gpuCounterPaths[ci]);
+    } else {
+        Log("GPU: initial CollectQueryData failed (0x%08lX)", (unsigned long)status);
     }
 
-    /* Query GPU name and VRAM from registry */
-    HKEY hKey;
-    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE,
-            "SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\0000",
-            0, KEY_READ, &hKey) == ERROR_SUCCESS) {
-        DWORD size = sizeof(g_gpuInfo.name);
-        RegQueryValueExA(hKey, "DriverDesc", NULL, NULL, (BYTE*)g_gpuInfo.name, &size);
+    /* ---- Query GPU name and VRAM from registry ----
+       Enumerate subkeys 0000-0009 to find the active GPU
+       (laptops often have iGPU at 0000 and dGPU at 0001/0002) */
+    {
+        const char *classGuid = "SYSTEM\\CurrentControlSet\\Control\\"
+                                "Class\\{4d36e968-e325-11ce-bfc1-08002be10318}";
+        char subkey[256];
+        int ki;
+        for (ki = 0; ki <= 9; ki++) {
+            snprintf(subkey, sizeof(subkey), "%s\\%04d", classGuid, ki);
+            HKEY hKey;
+            if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, subkey, 0, KEY_READ, &hKey) != ERROR_SUCCESS)
+                continue;
 
-        DWORD vramBytes = 0;
-        size = sizeof(vramBytes);
-        if (RegQueryValueExA(hKey, "HardwareInformation.qwMemorySize",
-                NULL, NULL, (BYTE*)&vramBytes, &size) == ERROR_SUCCESS) {
-            g_gpuInfo.dedicatedTotal = (SIZE_T)vramBytes;
-        } else {
+            /* Check if this is a GPU adapter (has DriverDesc) */
+            DWORD size = sizeof(g_gpuInfo.name);
+            memset(g_gpuInfo.name, 0, sizeof(g_gpuInfo.name));
+            if (RegQueryValueExA(hKey, "DriverDesc", NULL, NULL,
+                    (BYTE*)g_gpuInfo.name, &size) != ERROR_SUCCESS || g_gpuInfo.name[0] == 0) {
+                RegCloseKey(hKey);
+                continue;
+            }
+
+            /* Prefer the adapter with actual VRAM (skip Microsoft Basic Display) */
+            DWORD vramBytes = 0;
+            size = sizeof(vramBytes);
+            if (RegQueryValueExA(hKey, "HardwareInformation.qwMemorySize",
+                    NULL, NULL, (BYTE*)&vramBytes, &size) == ERROR_SUCCESS && vramBytes > 0) {
+                g_gpuInfo.dedicatedTotal = (SIZE_T)vramBytes;
+                g_gpuInfo.available = TRUE;
+                Log("GPU: %s, VRAM=%I64u MB (key=%s)",
+                    g_gpuInfo.name,
+                    (unsigned long long)(vramBytes / (1024 * 1024)),
+                    subkey);
+                RegCloseKey(hKey);
+                return;  /* Found a real GPU — done */
+            }
+
+            /* Check alternate VRAM key */
             size = sizeof(vramBytes);
             if (RegQueryValueExA(hKey, "HardwareInformation.MemorySize",
-                    NULL, NULL, (BYTE*)&vramBytes, &size) == ERROR_SUCCESS) {
+                    NULL, NULL, (BYTE*)&vramBytes, &size) == ERROR_SUCCESS && vramBytes > 0) {
                 g_gpuInfo.dedicatedTotal = (SIZE_T)vramBytes;
+                g_gpuInfo.available = TRUE;
+                Log("GPU: %s, VRAM=%I64u MB (alt key, %s)",
+                    g_gpuInfo.name,
+                    (unsigned long long)(vramBytes / (1024 * 1024)),
+                    subkey);
+                RegCloseKey(hKey);
+                return;  /* Found a real GPU — done */
+            }
+
+            /* May be a software adapter — keep looking */
+            RegCloseKey(hKey);
+        }
+
+        /* Fallback: use the first adapter that has a name, even without VRAM */
+        if (!g_gpuInfo.available) {
+            for (ki = 0; ki <= 9; ki++) {
+                snprintf(subkey, sizeof(subkey), "%s\\%04d", classGuid, ki);
+                HKEY hKey;
+                if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, subkey, 0, KEY_READ, &hKey) != ERROR_SUCCESS)
+                    continue;
+                DWORD size = sizeof(g_gpuInfo.name);
+                if (RegQueryValueExA(hKey, "DriverDesc", NULL, NULL,
+                        (BYTE*)g_gpuInfo.name, &size) == ERROR_SUCCESS && g_gpuInfo.name[0] != 0) {
+                    /* Skip known software-only adapters */
+                    if (strstr(g_gpuInfo.name, "Microsoft Basic") ||
+                        strstr(g_gpuInfo.name, "Microsoft Hyper-V")) {
+                        RegCloseKey(hKey);
+                        continue;
+                    }
+                    g_gpuInfo.available = TRUE;
+                    Log("GPU: %s (VRAM unknown, key=%s)", g_gpuInfo.name, subkey);
+                    RegCloseKey(hKey);
+                    return;
+                }
+                RegCloseKey(hKey);
             }
         }
-        RegCloseKey(hKey);
     }
-    if (g_gpuInfo.name[0]) g_gpuInfo.available = TRUE;
+
+    if (!g_gpuInfo.available)
+        Log("GPU: no adapter found in registry (keys 0000-0009)");
 }
 
 void QueryGpuInfo(void) {

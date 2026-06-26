@@ -263,6 +263,7 @@ typedef struct _PDH_FMT_COUNTERVALUE_ITEM_A {
 
 typedef PDH_STATUS (WINAPI *PFN_PdhOpenQueryA)(LPCSTR, DWORD_PTR, PDH_HQUERY*);
 typedef PDH_STATUS (WINAPI *PFN_PdhAddCounterA)(PDH_HQUERY, LPCSTR, DWORD_PTR, PDH_HCOUNTER*);
+typedef PDH_STATUS (WINAPI *PFN_PdhAddEnglishCounterA)(PDH_HQUERY, LPCSTR, DWORD_PTR, PDH_HCOUNTER*);
 typedef PDH_STATUS (WINAPI *PFN_PdhCollectQueryData)(PDH_HQUERY);
 typedef PDH_STATUS (WINAPI *PFN_PdhGetFormattedCounterArrayA)(PDH_HCOUNTER, DWORD, DWORD*, DWORD*, PDH_FMT_COUNTERVALUE_ITEM_A*);
 typedef PDH_STATUS (WINAPI *PFN_PdhCloseQuery)(PDH_HQUERY);
@@ -313,6 +314,7 @@ extern int            g_suspProcCount;
 /* PDH 函数指针 (GPU) */
 extern PFN_PdhOpenQueryA                g_pfnPdhOpenQueryA;
 extern PFN_PdhAddCounterA               g_pfnPdhAddCounterA;
+extern PFN_PdhAddEnglishCounterA        g_pfnPdhAddEnglishCounterA;
 extern PFN_PdhCollectQueryData          g_pfnPdhCollectQueryData;
 extern PFN_PdhGetFormattedCounterArrayA  g_pfnPdhGetFormattedCounterArrayA;
 extern PFN_PdhCloseQuery                g_pfnPdhCloseQuery;

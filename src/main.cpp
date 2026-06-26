@@ -9,9 +9,9 @@
  * 默认模式: 后台禁默运行 + Web 仪表盘 (http://127.0.0.1:18080)
  *
  * 运行模式:
- *   vm_manager.exe              → 后台禁默 (默认)
- *   vm_manager.exe /console     → 控制台调试
- *   vm_manager.exe /desktop     → C++ 桌面 GUI (6标签页 + 数据库面板 + GDI图表)
+ *   vm_manager.exe              → 桌面 GUI + Web 仪表盘 (默认)
+ *   vm_manager.exe /headless    → 后台禁默 + Web 仪表盘
+ *   vm_manager.exe /console     → 控制台调试模式
  *
  * 编译:
  *   gcc -c src/core/vm_*.c                          (C核心 → .o)

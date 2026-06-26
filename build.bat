@@ -98,9 +98,9 @@ echo   Output: %OUT%  (!FSIZE_KB! KB)
 echo ============================================================
 echo.
 echo Usage:
-echo   vm_manager.exe              Silent background + Web dashboard (DEFAULT)
+echo   vm_manager.exe              Desktop GUI + Web dashboard (DEFAULT)
+echo   vm_manager.exe /headless    Background silent + Web dashboard
 echo   vm_manager.exe /console     Console debug mode
-echo   vm_manager.exe /desktop     Desktop GUI mode
 echo.
 echo   Web Dashboard: http://127.0.0.1:18080
 echo   API Endpoints:
