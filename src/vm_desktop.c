@@ -6,8 +6,8 @@
  *   New: bar chart mode (toggle) alongside line chart
  *   UI polish: section labels, better spacing
  */
-#include "vm_common.h"
-#include "vm_locale.h"
+#include "core/vm_common.h"
+#include "core/vm_locale.h"
 
 /* ============================================================================
  * Dwm dark title bar (Win10 1809+)
@@ -1040,8 +1040,9 @@ int RunDesktop(void){
 
     ShowWindow(hwnd,SW_SHOW);UpdateWindow(hwnd);
 
-    if(!g_hHttpThread){
-        g_hHttpThread=CreateThread(NULL,0,HttpServerThread,NULL,0,NULL);
+    /* HTTP server is started by the C++ wrapper layer before us.
+       Just wait for it to be ready (max 3 seconds). */
+    {
         int wc2=0;while(g_httpPort==0&&wc2<30){Sleep(100);wc2++;}
     }
 

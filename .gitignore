@@ -1,7 +1,12 @@
-# VM Manager v4.0 — Git Ignore
+# VM Manager v5.0 — Git Ignore
+
 # Binary output
 vm_manager.exe
 *.exe
+
+# Build artifacts
+build/
+*.o
 
 # Runtime artifacts
 vm_manager.log
