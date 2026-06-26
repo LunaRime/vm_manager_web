@@ -5,6 +5,7 @@
  * Default mode: silent background + web dashboard.
  */
 #include "vm_app.hpp"
+#include "vm_desktop.hpp"
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -281,22 +282,18 @@ int VMApp::RunHeadless()
 }
 
 // ============================================================================
-// Desktop mode — full GUI (delegates to C desktop module)
+// Desktop mode — full C++ GUI with i18n, database panel, GDI charts
 // ============================================================================
-
-#ifdef WITH_DESKTOP_GUI
-extern "C" int RunDesktop(void);
-#endif
 
 int VMApp::RunDesktop()
 {
-#ifdef WITH_DESKTOP_GUI
     Log("VM Manager v5.0 starting in desktop GUI mode");
-    return RunDesktop();
-#else
-    Log("Desktop GUI not compiled in. Falling back to headless mode.");
-    return RunHeadless();
-#endif
+
+    g_bDesktop = TRUE;
+    InterlockedExchange(&m_running, 1);
+
+    VMDesktopApp desktop;
+    return desktop.Run(m_hInstance, SW_SHOW);
 }
 
 // ============================================================================

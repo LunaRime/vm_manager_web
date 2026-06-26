@@ -20,11 +20,11 @@ set "OUT=vm_manager.exe"
 
 REM ---- 编译选项 ----
 set "CFLAGS=-O2 -Wall"
-set "CPPFLAGS=-std=c++14 -O2 -Wall"
+set "CPPFLAGS=-std=c++14 -O2 -Wall -Wno-misleading-indentation"
 set "INCLUDES=-I src"
 
 REM ---- 链接库 ----
-set "LIBS=-lpsapi -lws2_32 -lcrypt32 -lcomctl32 -lgdi32"
+set "LIBS=-lpsapi -lws2_32 -lcrypt32 -lcomctl32 -lgdi32 -lcomdlg32"
 
 if not exist "%GPP%" (
     echo [ERROR] g++.exe not found: %GPP%
@@ -58,11 +58,15 @@ if !errorlevel! neq 0 goto :fail
 echo   [OK] 3 C modules compiled
 
 echo [2/4] Compiling C++ wrapper layer...
-"%GPP%" -c %INCLUDES% %CPPFLAGS% src/cpp/vm_app.cpp        -o %BUILD_DIR%/vm_app.o
+"%GPP%" -c %INCLUDES% %CPPFLAGS% src/cpp/vm_i18n.cpp         -o %BUILD_DIR%/vm_i18n.o
 if !errorlevel! neq 0 goto :fail
-"%GPP%" -c %INCLUDES% %CPPFLAGS% src/cpp/vm_http_server.cpp -o %BUILD_DIR%/vm_http_server.o
+"%GPP%" -c %INCLUDES% %CPPFLAGS% src/cpp/vm_app.cpp          -o %BUILD_DIR%/vm_app.o
 if !errorlevel! neq 0 goto :fail
-echo   [OK] 2 C++ modules compiled
+"%GPP%" -c %INCLUDES% %CPPFLAGS% src/cpp/vm_http_server.cpp   -o %BUILD_DIR%/vm_http_server.o
+if !errorlevel! neq 0 goto :fail
+"%GPP%" -c %INCLUDES% %CPPFLAGS% src/cpp/vm_desktop.cpp       -o %BUILD_DIR%/vm_desktop.o
+if !errorlevel! neq 0 goto :fail
+echo   [OK] 4 C++ modules compiled
 
 echo [3/4] Compiling entry point...
 "%GPP%" -c %INCLUDES% %CPPFLAGS% src/main.cpp -o %BUILD_DIR%/main.o
@@ -71,7 +75,9 @@ echo   [OK] main.cpp compiled
 
 echo [4/4] Linking...
 "%GPP%" %BUILD_DIR%/vm_engine.o %BUILD_DIR%/vm_db.o %BUILD_DIR%/vm_locale.o ^
-        %BUILD_DIR%/vm_app.o %BUILD_DIR%/vm_http_server.o %BUILD_DIR%/main.o ^
+        %BUILD_DIR%/vm_i18n.o %BUILD_DIR%/vm_app.o ^
+        %BUILD_DIR%/vm_http_server.o %BUILD_DIR%/vm_desktop.o ^
+        %BUILD_DIR%/main.o ^
         -o %OUT% -mwindows %LIBS% -O2 -s
 if !errorlevel! neq 0 goto :fail
 

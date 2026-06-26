@@ -23,6 +23,25 @@ extern "C" {
 #include "../core/vm_db.h"
 }
 
+/* Undefine C macros that conflict with C++ identifiers.
+   These C macros from vm_common.h are used only by the legacy C code.
+   The C++ layer defines its own constants with the same names. */
+#ifdef TRAY_TIP
+#undef TRAY_TIP
+#endif
+#ifdef TRAY_UID
+#undef TRAY_UID
+#endif
+#ifdef IDM_SHOW
+#undef IDM_SHOW
+#endif
+#ifdef IDM_CLEANUP
+#undef IDM_CLEANUP
+#endif
+#ifdef IDM_EXIT
+#undef IDM_EXIT
+#endif
+
 /* Dashboard HTML — embedded SPA string constant */
 extern "C" {
 extern const char *const DASHBOARD_HTML;
