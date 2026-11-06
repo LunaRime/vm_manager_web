@@ -31,3 +31,6 @@ dist/
 *.log
 .env
 .env.local
+
+# WorkBuddy local workspace data (not part of the release)
+.workbuddy/
