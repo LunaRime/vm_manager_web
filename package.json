@@ -1,0 +1,24 @@
+{
+  "name": "vm-manager-web",
+  "version": "6.0.0",
+  "private": true,
+  "type": "module",
+  "description": "VM Manager — Windows memory/process monitor, modern separated frontend & backend",
+  "workspaces": ["server", "web"],
+  "scripts": {
+    "dev": "concurrently -k -n server,web -c cyan,magenta \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "npm run dev -w @vm/server",
+    "dev:web": "npm run dev -w @vm/web",
+    "build": "npm run build -w @vm/server && npm run build -w @vm/web",
+    "start": "npm run start -w @vm/server",
+    "typecheck": "npm run typecheck -w @vm/server && npm run typecheck -w @vm/web"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "concurrently": "^9.1.2",
+    "typescript": "^5.7.3"
+  },
+  "engines": {
+    "node": ">=20.11.0"
+  }
+}

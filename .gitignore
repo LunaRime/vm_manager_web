@@ -21,3 +21,13 @@ vm_data.db
 # OS
 Thumbs.db
 Desktop.ini
+
+# Modern stack (v6)
+node_modules/
+dist/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.log
+.env
+.env.local
